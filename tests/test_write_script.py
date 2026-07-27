@@ -35,3 +35,47 @@ def test_build_front_matter_dialogue():
 
 def test_build_front_matter_plain_monologue_is_empty():
     assert ws.build_front_matter(False, None, None, "V-A", "V-B") == ""
+
+
+def test_ask_claude_resolves_shim_via_which(monkeypatch):
+    """Windows npm installs expose claude.cmd; bare 'claude' won't spawn."""
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = "A: hi\nB: yo"
+        stderr = ""
+
+    monkeypatch.setattr(ws.shutil, "which", lambda _: r"C:\npm\claude.CMD")
+    monkeypatch.setattr(ws.subprocess, "run",
+                        lambda cmd, **k: seen.setdefault("cmd", cmd) and FakeProc()
+                        or FakeProc())
+    out = ws.ask_claude("prompt")
+    assert seen["cmd"][0] == r"C:\npm\claude.CMD"
+    assert out == "A: hi\nB: yo"
+
+
+def test_ask_claude_missing_cli_raises(monkeypatch):
+    monkeypatch.setattr(ws.shutil, "which", lambda _: None)
+    try:
+        ws.ask_claude("prompt")
+        assert False, "should have raised"
+    except RuntimeError as e:
+        assert "not found" in str(e)
+
+
+def test_ask_claude_surfaces_stdout_errors(monkeypatch):
+    """Auth failures print to stdout with empty stderr - must not be hidden."""
+
+    class FakeProc:
+        returncode = 1
+        stdout = "Failed to authenticate. API Error: 401"
+        stderr = ""
+
+    monkeypatch.setattr(ws.shutil, "which", lambda _: "claude.cmd")
+    monkeypatch.setattr(ws.subprocess, "run", lambda *a, **k: FakeProc())
+    try:
+        ws.ask_claude("prompt")
+        assert False, "should have raised"
+    except RuntimeError as e:
+        assert "401" in str(e)

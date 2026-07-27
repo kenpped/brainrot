@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -83,17 +84,21 @@ def build_front_matter(dialogue: bool, style: str | None, bg: str | None,
 
 
 def ask_claude(prompt: str, timeout: int = 300) -> str:
-    try:
-        proc = subprocess.run(
-            ["claude", "-p", prompt],
-            capture_output=True, text=True, timeout=timeout, shell=False,
-        )
-    except FileNotFoundError:
+    # shutil.which resolves Windows shims like claude.cmd (npm installs);
+    # a bare ["claude", ...] subprocess can't.
+    exe = shutil.which("claude")
+    if exe is None:
         raise RuntimeError(
-            "claude CLI not found - install Claude Code or write the script by hand"
-        ) from None
+            "claude CLI not found on PATH - install Claude Code or write the script by hand"
+        )
+    proc = subprocess.run(
+        [exe, "-p", prompt],
+        capture_output=True, text=True, timeout=timeout, shell=False,
+    )
     if proc.returncode != 0:
-        raise RuntimeError(f"claude -p failed ({proc.returncode}): {proc.stderr.strip()}")
+        # auth errors land on stdout, so fall back to it when stderr is empty
+        detail = proc.stderr.strip() or proc.stdout.strip()[:300]
+        raise RuntimeError(f"claude -p failed ({proc.returncode}): {detail}")
     return strip_fences(proc.stdout)
 
 
