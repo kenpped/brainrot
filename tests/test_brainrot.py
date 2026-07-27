@@ -174,6 +174,11 @@ def test_parse_script_bad_number_raises(tmp_path):
         br.parse_script(f)
 
 
+def test_parse_script_missing_file_is_clean_error(tmp_path):
+    with pytest.raises(ValueError, match="script not found"):
+        br.parse_script(tmp_path / "nope.txt")
+
+
 def test_parse_script_empty_raises(tmp_path):
     f = tmp_path / "s.txt"
     f.write_text("   \n", encoding="utf-8")
@@ -257,6 +262,93 @@ def test_build_ass_dialogue_colors_beat_highlights():
     assert br.COLORS["red"] not in dialogues[0] and br.COLORS["red"] not in dialogues[1]
     assert "\\c&H" not in dialogues[0]              # speaker a stays white
     assert "{\\c" + br.COLORS["yellow"] + "}" in dialogues[1]  # speaker b yellow
+
+
+# ---- characters and cast ---------------------------------------------------
+
+def test_shipped_characters_file_is_valid():
+    chars = br.load_characters()  # reads the real characters.json
+    assert len(chars) >= 4
+    assert "grump" in chars and "hype" in chars
+    for c in chars.values():
+        assert c["voice"] and c["persona"]
+
+
+def test_validate_character_rejects_bad_fields():
+    with pytest.raises(ValueError, match="voice is required"):
+        br.validate_character("x", {"persona": "p"})
+    with pytest.raises(ValueError, match="persona is required"):
+        br.validate_character("x", {"voice": "v"})
+    with pytest.raises(ValueError, match="pitch"):
+        br.validate_character("x", {"voice": "v", "persona": "p", "pitch": "low"})
+    with pytest.raises(ValueError, match="color"):
+        br.validate_character("x", {"voice": "v", "persona": "p", "color": "mauve"})
+    with pytest.raises(ValueError, match="rate_bump"):
+        br.validate_character("x", {"voice": "v", "persona": "p", "rate_bump": 99})
+
+
+def test_pitch_regex():
+    assert br.PITCH_RE.match("+0Hz") and br.PITCH_RE.match("-18Hz")
+    assert not br.PITCH_RE.match("18Hz")
+    assert not br.PITCH_RE.match("+18")
+    assert not br.PITCH_RE.match("deep")
+
+
+def test_bump_rate():
+    assert br.bump_rate("+28%", -8) == "+20%"
+    assert br.bump_rate("+10%", -20) == "-10%"
+    assert br.bump_rate("+0%", 0) == "+0%"
+    assert br.bump_rate("+85%", 20) == "+90%"   # clamped high
+    assert br.bump_rate("-35%", -20) == "-40%"  # clamped low
+
+
+def test_parse_script_cast_front_matter(tmp_path):
+    f = tmp_path / "s.txt"
+    f.write_text("cast: Grump, HYPE\n---\ngrump: hi\nhype: yo", encoding="utf-8")
+    _, meta = br.parse_script(f)
+    assert meta["cast"] == ["grump", "hype"]
+
+
+def test_parse_script_cast_needs_two(tmp_path):
+    f = tmp_path / "s.txt"
+    f.write_text("cast: grump\n---\ngrump: monologue?", encoding="utf-8")
+    with pytest.raises(ValueError, match="at least 2"):
+        br.parse_script(f)
+
+
+def test_dialogue_line_specs_apply_character_settings():
+    cfg = {
+        "grump": {"voice": "V-deep", "pitch": "-18Hz", "rate_bump": -8},
+        "hype": {"voice": "V-fast", "pitch": "+14Hz", "rate_bump": 6},
+        "raw": {"voice": "V-plain"},
+    }
+    lines = [("grump", "no."), ("hype", "yes!"), ("raw", "hm.")]
+    specs = br.dialogue_line_specs(lines, cfg, "+28%")
+    assert specs[0] == ("no.", "V-deep", "+20%", "-18Hz")
+    assert specs[1] == ("yes!", "V-fast", "+34%", "+14Hz")
+    assert specs[2] == ("hm.", "V-plain", "+28%", "+0Hz")
+
+
+def test_speaker_color_tags_use_character_colors():
+    cfg = {"grump": {"voice": "v", "color": "orange"},
+           "hype": {"voice": "v", "color": "yellow"}}
+    tags = br.speaker_color_tags(["grump", "hype"], cfg)
+    assert tags["grump"] == "{\\c" + br.COLORS["orange"] + "}"
+    assert tags["hype"] == "{\\c" + br.COLORS["yellow"] + "}"
+
+
+def test_render_rejects_unknown_cast_before_tts(tmp_path, monkeypatch):
+    script = tmp_path / "s.txt"
+    script.write_text("cast: grump, nobody\n---\ngrump: hi\nnobody: yo",
+                      encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("TTS ran before cast validation")
+
+    monkeypatch.setattr(br, "synth_voiceover", boom)
+    monkeypatch.setattr(br.shutil, "which", lambda _: "ffmpeg")
+    with pytest.raises(ValueError, match="unknown cast member"):
+        br.render(script, tmp_path / "missing", tmp_path / "o.mp4")
 
 
 # ---- resolve_settings ------------------------------------------------------

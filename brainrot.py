@@ -65,7 +65,9 @@ MIN_WORD_DUR = 0.08
 POP_MS = 60                   # pop-in animation length in milliseconds
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 RATE_RE = re.compile(r"^[+-]\d+%$")
+PITCH_RE = re.compile(r"^[+-]\d+Hz$")
 STYLES_FILE = Path(__file__).resolve().parent / "styles.json"
+CHARACTERS_FILE = Path(__file__).resolve().parent / "characters.json"
 
 # ASS colors are &HBBGGRR& (blue-green-red, not RGB)
 COLORS = {
@@ -81,6 +83,7 @@ COLORS = {
 DEFAULTS = {
     "voice": DEFAULT_VOICE,
     "rate": DEFAULT_RATE,
+    "pitch": "+0Hz",
     "font": DEFAULT_FONT,
     "fontsize": 130,
     "outline": 9,
@@ -89,7 +92,7 @@ DEFAULTS = {
     "highlight_chance": 0.22,
 }
 STYLE_KEYS = set(DEFAULTS)
-FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers"}
+FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast"}
 DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
 SPEAKER_PALETTE = ["white", "yellow", "cyan", "lime", "pink"]  # caption color per speaker
 
@@ -142,6 +145,9 @@ def validate_style(name: str, s: dict) -> None:
                              f"pick from {sorted(COLORS)}")
     if "highlight_chance" in s and not 0 <= float(s["highlight_chance"]) <= 1:
         raise ValueError(f"style '{name}': highlight_chance must be 0..1")
+    if "pitch" in s and not PITCH_RE.match(str(s["pitch"])):
+        raise ValueError(f"style '{name}': pitch must look like -15Hz or +20Hz, "
+                         f"got {s['pitch']!r}")
 
 
 def load_styles(path: Path | None = None) -> dict:
@@ -152,6 +158,41 @@ def load_styles(path: Path | None = None) -> dict:
     if "default" not in styles:
         raise ValueError(f"{p} must define a 'default' style")
     return styles
+
+
+def validate_character(name: str, c: dict) -> None:
+    allowed = {"voice", "pitch", "rate_bump", "color", "persona"}
+    unknown = set(c) - allowed
+    if unknown:
+        raise ValueError(f"character '{name}': unknown keys {sorted(unknown)}")
+    if not c.get("voice"):
+        raise ValueError(f"character '{name}': voice is required")
+    if not c.get("persona"):
+        raise ValueError(f"character '{name}': persona is required "
+                         "(the script writer speaks in it)")
+    if "pitch" in c and not PITCH_RE.match(str(c["pitch"])):
+        raise ValueError(f"character '{name}': pitch must look like -15Hz or +20Hz")
+    if "rate_bump" in c and (isinstance(c["rate_bump"], bool)
+                             or not isinstance(c["rate_bump"], int)
+                             or not -40 <= c["rate_bump"] <= 40):
+        raise ValueError(f"character '{name}': rate_bump must be an int in -40..40")
+    if "color" in c and c["color"] not in COLORS:
+        raise ValueError(f"character '{name}': color must be one of {sorted(COLORS)}")
+
+
+def load_characters(path: Path | None = None) -> dict:
+    p = Path(path) if path else CHARACTERS_FILE
+    characters = json.loads(p.read_text(encoding="utf-8"))
+    for name, c in characters.items():
+        validate_character(name, c)
+    return characters
+
+
+def bump_rate(rate: str, bump: int) -> str:
+    """'+28%' bumped by -8 -> '+20%'. Clamped so characters can't leave the
+    range edge-tts accepts."""
+    value = max(-40, min(90, int(rate.rstrip("%")) + bump))
+    return f"{value:+d}%"
 
 
 def _parse_speakers(value: str) -> dict[str, str]:
@@ -181,6 +222,11 @@ def _convert_front_value(key: str, value: str):
         return [c.strip().lower() for c in value.split(",")]
     if key == "speakers":
         return _parse_speakers(value)
+    if key == "cast":
+        names = [n.strip().lower() for n in value.split(",") if n.strip()]
+        if len(names) < 2:
+            raise ValueError("cast needs at least 2 characters, e.g. cast: grump, hype")
+        return names
     return value
 
 
@@ -191,7 +237,10 @@ def parse_script(path: Path) -> tuple[str, dict]:
     key must be a known one, so prose like "Fun fact: ..." never triggers it)
     and is closed by a line that is exactly `---`.
     """
-    raw = Path(path).read_text(encoding="utf-8")
+    path = Path(path)
+    if not path.is_file():
+        raise ValueError(f"script not found: {path}")
+    raw = path.read_text(encoding="utf-8")
     lines = raw.splitlines()
     first = next((l.strip() for l in lines if l.strip()), "")
     m = re.match(r"^(\w+)\s*:\s*(.*)$", first)
@@ -276,14 +325,36 @@ def speaker_at(spans: list[tuple[float, float, str]], time: float) -> str:
     return spans[-1][2]
 
 
-def speaker_color_tags(names: list[str]) -> dict[str, str]:
-    """Caption color per speaker, in declaration order. First speaker keeps
-    the plain white style; the rest get \\c overrides."""
+def speaker_color_tags(names: list[str],
+                       speakers_cfg: dict | None = None) -> dict[str, str]:
+    """Caption color per speaker. Characters bring their own color; raw
+    speakers fall back to the palette in declaration order (first = plain
+    white style, rest get \\c overrides)."""
     tags = {}
     for i, name in enumerate(names):
-        color = SPEAKER_PALETTE[i % len(SPEAKER_PALETTE)]
+        color = (speakers_cfg or {}).get(name, {}).get("color") \
+            or SPEAKER_PALETTE[i % len(SPEAKER_PALETTE)]
         tags[name] = "" if color == "white" else "{\\c" + COLORS[color] + "}"
     return tags
+
+
+def dialogue_line_specs(
+    lines: list[tuple[str, str]],
+    speakers_cfg: dict,
+    base_rate: str,
+) -> list[tuple[str, str, str, str]]:
+    """Per line: (text, voice, rate, pitch). Characters bend the base rate
+    with rate_bump and bring their own pitch; raw speakers use defaults."""
+    specs = []
+    for name, text in lines:
+        c = speakers_cfg[name]
+        specs.append((
+            text,
+            c["voice"],
+            bump_rate(base_rate, c.get("rate_bump", 0)),
+            c.get("pitch", "+0Hz"),
+        ))
+    return specs
 
 
 def resolve_settings(
@@ -521,31 +592,34 @@ def probe_duration(path: Path) -> float:
     return float(out.strip())
 
 
-def synth_voiceover(text: str, voice: str, rate: str, mp3_path: Path) -> None:
+def synth_voiceover(text: str, voice: str, rate: str, mp3_path: Path,
+                    pitch: str = "+0Hz") -> None:
     import asyncio
 
     import edge_tts
 
     async def _run():
-        await edge_tts.Communicate(text, voice, rate=rate).save(str(mp3_path))
+        await edge_tts.Communicate(
+            text, voice, rate=rate, pitch=pitch).save(str(mp3_path))
 
     asyncio.run(_run())
 
 
 def synth_dialogue(
     lines: list[tuple[str, str]],
-    speakers: dict[str, str],
+    speakers_cfg: dict,
     rate: str,
     workdir: Path,
     out_wav: Path,
 ) -> list[tuple[str, float]]:
-    """Synth each dialogue line with its speaker's voice, join them with a
-    short silence gap into one wav. Returns per-line (speaker, seconds) for
-    the caption color timeline."""
+    """Synth each dialogue line with its speaker's voice/pitch/speed, join
+    them with a short silence gap into one wav. Returns per-line
+    (speaker, seconds) for the caption color timeline."""
+    specs = dialogue_line_specs(lines, speakers_cfg, rate)
     parts = []
-    for i, (name, line) in enumerate(lines):
+    for i, ((name, _line), (text, voice, line_rate, pitch)) in enumerate(zip(lines, specs)):
         p = workdir / f"part_{i:03d}.mp3"
-        synth_voiceover(line, speakers[name], rate, p)
+        synth_voiceover(text, voice, line_rate, p, pitch=pitch)
         parts.append((name, p, probe_duration(p)))
 
     silence = workdir / "gap.mp3"
@@ -608,7 +682,21 @@ def render(
     styles = styles if styles is not None else load_styles()
     text, front = parse_script(Path(script_path))
     s, bg_tag, style_name = resolve_settings(styles, cli=cli, weak=weak, front=front)
-    backgrounds = list_backgrounds(Path(bg), tag=bg_tag)  # fail fast, before slow steps
+
+    # resolve the dialogue cast/speakers up front - fail fast, before slow steps
+    speakers_cfg = None
+    if front.get("cast"):
+        characters = load_characters()
+        unknown = [n for n in front["cast"] if n not in characters]
+        if unknown:
+            raise ValueError(f"unknown cast member(s) {unknown}, "
+                             f"available: {', '.join(sorted(characters))}")
+        speakers_cfg = {n: characters[n] for n in front["cast"]}
+    elif front.get("speakers"):
+        speakers_cfg = {n: {"voice": v} for n, v in front["speakers"].items()}
+    dialogue = parse_dialogue(text, speakers_cfg) if speakers_cfg else None
+
+    backgrounds = list_backgrounds(Path(bg), tag=bg_tag)
     warn_if_font_missing(s["font"])
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -622,21 +710,23 @@ def render(
         workdir = Path(cleanup.name)
 
     try:
-        speakers = front.get("speakers")
-        if speakers:
-            dialogue = parse_dialogue(text, speakers)
+        if dialogue:
             voice_path = workdir / "voice.wav"
-            durations = synth_dialogue(dialogue, speakers, s["rate"], workdir, voice_path)
+            durations = synth_dialogue(dialogue, speakers_cfg, s["rate"],
+                                       workdir, voice_path)
             spans = speaker_spans(durations)
-            speaker_tags = speaker_color_tags(list(speakers))
+            speaker_tags = speaker_color_tags(list(speakers_cfg), speakers_cfg)
             audio_dur = probe_duration(voice_path)
-            print(f"[1/4] voiceover  dialogue {len(dialogue)} lines, "
-                  + ", ".join(f"{n}={v}" for n, v in speakers.items())
-                  + f" {s['rate']} -> {audio_dur:.1f}s", flush=True)
+            who = ", ".join(
+                f"{n}={c['voice']}" + (f"@{c['pitch']}" if c.get("pitch") else "")
+                for n, c in speakers_cfg.items())
+            print(f"[1/4] voiceover  dialogue {len(dialogue)} lines, {who} "
+                  f"{s['rate']} -> {audio_dur:.1f}s", flush=True)
         else:
             spans = speaker_tags = None
             voice_path = workdir / "voice.mp3"
-            synth_voiceover(text, s["voice"], s["rate"], voice_path)
+            synth_voiceover(text, s["voice"], s["rate"], voice_path,
+                            pitch=s["pitch"])
             audio_dur = probe_duration(voice_path)
             print(f"[1/4] voiceover  {s['voice']} {s['rate']} (style {style_name}) "
                   f"-> {audio_dur:.1f}s", flush=True)

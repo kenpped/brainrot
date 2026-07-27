@@ -120,6 +120,26 @@ def test_build_front_matter_plain_monologue_is_empty():
     assert ws.build_front_matter(False, None, None, "V-A", "V-B") == ""
 
 
+def test_build_front_matter_cast_wins_over_speakers():
+    fm = ws.build_front_matter(True, "hype", None, "V-A", "V-B",
+                               cast=["grump", "hype"])
+    assert fm == "cast: grump, hype\nstyle: hype\n---\n"
+    assert "speakers" not in fm
+
+
+def test_build_prompt_cast_injects_personas():
+    chars = {
+        "grump": {"voice": "v", "persona": "a permanently unimpressed old man"},
+        "hype": {"voice": "v", "persona": "an overcaffeinated hype kid"},
+    }
+    p = ws.build_prompt("space junk", True, cast=["grump", "hype"], characters=chars)
+    assert "permanently unimpressed old man" in p
+    assert "overcaffeinated hype kid" in p
+    assert '"grump: "' in p and '"hype: "' in p
+    assert "space junk" in p
+    assert ws.SENTINEL_BEGIN in p
+
+
 def test_ask_claude_resolves_shim_and_runs_in_neutral_cwd(monkeypatch):
     """Windows npm shims need which(); cwd must NOT be the repo, or claude -p
     goes agentic (reads files, writes commentary, wanders off topic)."""

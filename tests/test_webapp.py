@@ -56,6 +56,30 @@ def test_build_write_cmd():
     assert cmd[cmd.index("--bg") + 1] == "synthetic"
 
 
+def test_build_write_cmd_cast_replaces_dialogue_flag():
+    cmd = webapp.build_write_cmd("t", True, None, None, cast=["grump", "hype"])
+    assert cmd[cmd.index("--cast") + 1] == "grump,hype"
+    assert "--dialogue" not in cmd
+
+
+def test_write_validates_cast(client):
+    bad = client.post("/api/write", json={"topic": "t", "cast": ["grump"]})
+    assert bad.status_code == 400
+    same = client.post("/api/write", json={"topic": "t", "cast": ["grump", "grump"]})
+    assert same.status_code == 400
+    unknown = client.post("/api/write", json={"topic": "t", "cast": ["grump", "peter"]})
+    assert unknown.status_code == 400
+    ok = client.post("/api/write", json={"topic": "t", "cast": ["grump", "hype"]})
+    assert ok.status_code == 202
+
+
+def test_config_lists_characters(client):
+    data = client.get("/api/config").get_json()
+    names = [c["name"] for c in data["characters"]]
+    assert "grump" in names and "hype" in names
+    assert all(c["persona"] for c in data["characters"])
+
+
 def test_name_for_script_strips_front_matter():
     text = "voice: x\nstyle: hype\n---\nYour brain is running a scam today"
     assert webapp.name_for_script(text) == "your-brain-is-running-a-scam"

@@ -101,9 +101,11 @@ def build_render_cmd(script_path: Path, out_path: Path, opts: dict) -> list[str]
 
 
 def build_write_cmd(topic: str, dialogue: bool, style: str | None,
-                    bg: str | None) -> list[str]:
+                    bg: str | None, cast: list[str] | None = None) -> list[str]:
     cmd = [sys.executable, str(ROOT / "write_script.py"), topic]
-    if dialogue:
+    if cast:
+        cmd += ["--cast", ",".join(cast)]
+    elif dialogue:
         cmd.append("--dialogue")
     if style:
         cmd += ["--style", style]
@@ -171,6 +173,11 @@ def api_config():
         "voices": [{"voice": v, "vibe": d} for v, d in CURATED],
         "bg_tags": scan_bg_tags(),
         "fonts": font_choices(),
+        "characters": [
+            {"name": n, "persona": c["persona"], "color": c.get("color", "white"),
+             "voice": c["voice"]}
+            for n, c in sorted(br.load_characters().items())
+        ],
     })
 
 
@@ -216,10 +223,19 @@ def api_write():
         return jsonify({"error": "topic is empty"}), 400
     style = (data.get("style") or "").strip() or None
     bg = (data.get("bg_tag") or "").strip() or None
+    cast = data.get("cast") or None
+    if cast is not None:
+        if not isinstance(cast, list) or len(cast) != 2 or cast[0] == cast[1]:
+            return jsonify({"error": "cast must be 2 different character names"}), 400
+        known = br.load_characters()
+        bad = [n for n in cast if n not in known]
+        if bad:
+            return jsonify({"error": f"unknown character(s): {', '.join(bad)}"}), 400
     dest = ROOT / "scripts" / f"{slugify(topic)}.txt"
     job = Job(id=uuid.uuid4().hex[:10], kind="script", name=f"write: {topic[:48]}")
     JOBS[job.id] = job
-    QUEUE.put((job, build_write_cmd(topic, bool(data.get("dialogue")), style, bg), dest))
+    QUEUE.put((job, build_write_cmd(topic, bool(data.get("dialogue")), style, bg,
+                                    cast=cast), dest))
     return jsonify({"id": job.id}), 202
 
 

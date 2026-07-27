@@ -79,9 +79,15 @@
     <h2>1 · script</h2>
     <div class="row">
       <input type="text" id="topic" placeholder='topic, e.g. "why school is a scam"'>
-      <label class="check"><input type="checkbox" id="dialogue"> 2 voices</label>
+      <label class="check"><input type="checkbox" id="dialogue"> 2 characters</label>
       <button id="writeBtn">write with AI</button>
     </div>
+    <div class="row" id="castRow" style="display:none;margin-top:8px;">
+      <select id="castA"></select>
+      <span style="color:var(--muted)">vs</span>
+      <select id="castB"></select>
+    </div>
+    <div class="status" id="castVibe" style="white-space:pre-line"></div>
     <textarea id="script" spellcheck="false"
 placeholder="...or write/paste the script here.
 
@@ -152,6 +158,21 @@ async function loadConfig() {
     cfg.bg_tags.map(t => `<option>${t}</option>`).join("");
   $("font").innerHTML = '<option value="">style default</option>' +
     cfg.fonts.map(f => `<option style="font-family:'${f}'">${f}</option>`).join("");
+  const charOpts = cfg.characters.map(c => `<option value="${c.name}">${c.name}</option>`).join("");
+  $("castA").innerHTML = charOpts;
+  $("castB").innerHTML = charOpts;
+  if (cfg.characters.length > 1) {
+    $("castA").value = cfg.characters.some(c => c.name === "grump") ? "grump" : cfg.characters[0].name;
+    $("castB").value = cfg.characters.some(c => c.name === "hype") ? "hype" : cfg.characters[1].name;
+  }
+  castVibe();
+}
+
+function castVibe() {
+  if (!CFG || !$("dialogue").checked) { $("castVibe").textContent = ""; return; }
+  const find = n => CFG.characters.find(c => c.name === n);
+  const a = find($("castA").value), b = find($("castB").value);
+  $("castVibe").textContent = a && b ? `${a.name}: ${a.persona}\n${b.name}: ${b.persona}` : "";
 }
 
 function previewFont() {
@@ -168,11 +189,19 @@ async function writeAI() {
   if (!topic) { st.textContent = "type a topic first"; st.className = "status err"; return; }
   $("writeBtn").disabled = true;
   st.className = "status"; st.textContent = "asking your local Claude...";
+  const body = {
+    topic, dialogue: $("dialogue").checked,
+    style: $("style").value, bg_tag: $("bg").value,
+  };
+  if ($("dialogue").checked && $("castA").value && $("castB").value) {
+    if ($("castA").value === $("castB").value) {
+      st.className = "status err"; st.textContent = "pick two different characters";
+      $("writeBtn").disabled = false; return;
+    }
+    body.cast = [$("castA").value, $("castB").value];
+  }
   try {
-    const {id} = await jfetch("/api/write", {
-      topic, dialogue: $("dialogue").checked,
-      style: $("style").value, bg_tag: $("bg").value,
-    });
+    const {id} = await jfetch("/api/write", body);
     for (;;) {
       await new Promise(r => setTimeout(r, 1500));
       const j = await jfetch("/api/jobs/" + id);
@@ -225,6 +254,12 @@ $("go").onclick = generate;
 $("topic").addEventListener("keydown", e => { if (e.key === "Enter") writeAI(); });
 $("font").addEventListener("change", previewFont);
 $("style").addEventListener("change", previewFont);
+$("dialogue").addEventListener("change", () => {
+  $("castRow").style.display = $("dialogue").checked ? "flex" : "none";
+  castVibe();
+});
+$("castA").addEventListener("change", castVibe);
+$("castB").addEventListener("change", castVibe);
 loadConfig().then(() => { previewFont(); refresh(); });
 setInterval(refresh, 2000);
 </script>

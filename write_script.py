@@ -29,7 +29,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from brainrot import parse_script
+from brainrot import load_characters, parse_dialogue, parse_script
 
 DEFAULT_VOICE_A = "en-US-BrianNeural"
 DEFAULT_VOICE_B = "en-US-JennyNeural"
@@ -86,6 +86,28 @@ A: first line
 B: second line
 END SCRIPT"""
 
+CAST_PROMPT = GUARD + """\
+Write a short two-character dialogue script for a vertical brainrot-style
+video about: {topic}
+
+The characters (keep them strongly in personality the whole time):
+- {a}: {persona_a}
+- {b}: {persona_b}
+
+Rules:
+- 110 to 150 words total, 8 to 14 short lines
+- every line starts with exactly "{a}: " or "{b}: "
+- {a} opens with a hook question or a wild claim
+- the personality clash IS the comedy; let them bicker while the facts land
+- stay strictly on the topic: {topic}
+- no emojis, no stage directions, no markdown
+
+Output EXACTLY this shape and nothing else:
+BEGIN SCRIPT
+{a}: first line
+{b}: second line
+END SCRIPT"""
+
 RETRY_SUFFIX = (
     "\n\nREMINDER: your previous attempt failed validation. Output ONLY the "
     "BEGIN SCRIPT / END SCRIPT block, on topic, with no commentary, no file "
@@ -98,7 +120,16 @@ def slugify(topic: str, max_len: int = 40) -> str:
     return slug[:max_len].rstrip("-") or "script"
 
 
-def build_prompt(topic: str, dialogue: bool) -> str:
+def build_prompt(topic: str, dialogue: bool,
+                 cast: list[str] | None = None,
+                 characters: dict | None = None) -> str:
+    if cast and characters:
+        a, b = cast[0], cast[1]
+        return CAST_PROMPT.format(
+            topic=topic, a=a, b=b,
+            persona_a=characters[a]["persona"],
+            persona_b=characters[b]["persona"],
+        )
     template = DIALOGUE_PROMPT if dialogue else MONO_PROMPT
     return template.format(topic=topic)
 
@@ -133,9 +164,12 @@ def on_topic(body: str, topic: str) -> bool:
 
 
 def build_front_matter(dialogue: bool, style: str | None, bg: str | None,
-                       voice_a: str, voice_b: str) -> str:
+                       voice_a: str, voice_b: str,
+                       cast: list[str] | None = None) -> str:
     keys = []
-    if dialogue:
+    if cast:
+        keys.append(f"cast: {', '.join(cast)}")
+    elif dialogue:
         keys.append(f"speakers: A={voice_a}, B={voice_b}")
     if style:
         keys.append(f"style: {style}")
@@ -169,9 +203,11 @@ def ask_claude(prompt: str, timeout: int = 300) -> str:
     return proc.stdout
 
 
-def generate(topic: str, dialogue: bool, attempts: int = 2) -> str:
+def generate(topic: str, dialogue: bool, attempts: int = 2,
+             cast: list[str] | None = None,
+             characters: dict | None = None) -> str:
     """Ask, validate, retry once, or fail loudly with the raw reply."""
-    prompt = build_prompt(topic, dialogue)
+    prompt = build_prompt(topic, dialogue, cast=cast, characters=characters)
     last_raw, last_reason = "", "no attempt made"
     for i in range(attempts):
         raw = ask_claude(prompt if i == 0 else prompt + RETRY_SUFFIX)
@@ -198,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("topic", help="what the video is about")
     ap.add_argument("--dialogue", action="store_true",
                     help="two-speaker back-and-forth instead of a monologue")
+    ap.add_argument("--cast", default=None,
+                    help="two characters.json names, e.g. grump,hype "
+                         "(implies --dialogue, personas steer the writing)")
     ap.add_argument("--style", default=None, help="styles.json preset to bake in")
     ap.add_argument("--bg", default=None, help="background tag to bake in, e.g. minecraft")
     ap.add_argument("--voice-a", default=DEFAULT_VOICE_A, help="dialogue speaker A voice")
@@ -206,22 +245,39 @@ def main(argv: list[str] | None = None) -> int:
                     default=Path(__file__).resolve().parent / "scripts")
     args = ap.parse_args(argv)
 
-    print(f"asking local Claude for a {'dialogue' if args.dialogue else 'monologue'} "
-          f"about: {args.topic}", flush=True)
+    cast = None
+    characters = None
+    if args.cast:
+        cast = [n.strip().lower() for n in args.cast.split(",") if n.strip()]
+        characters = load_characters()
+        unknown = [n for n in cast if n not in characters]
+        if len(cast) != 2 or unknown:
+            print(f"error: --cast needs exactly 2 names from "
+                  f"{', '.join(sorted(characters))}"
+                  + (f" (unknown: {', '.join(unknown)})" if unknown else ""),
+                  file=sys.stderr)
+            return 1
+        args.dialogue = True
+
+    mode = f"{cast[0]} vs {cast[1]}" if cast else \
+        ("dialogue" if args.dialogue else "monologue")
+    print(f"asking local Claude for a {mode} about: {args.topic}", flush=True)
     try:
-        body = generate(args.topic, args.dialogue)
+        body = generate(args.topic, args.dialogue, cast=cast, characters=characters)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
 
     front = build_front_matter(args.dialogue, args.style, args.bg,
-                               args.voice_a, args.voice_b)
+                               args.voice_a, args.voice_b, cast=cast)
     args.outdir.mkdir(parents=True, exist_ok=True)
     dest = args.outdir / f"{slugify(args.topic)}.txt"
     dest.write_text(front + body + "\n", encoding="utf-8")
 
     try:
         parse_script(dest)  # same validation the renderer will run
+        if cast:             # and the cast lines must actually parse as dialogue
+            parse_dialogue(body, {n: characters[n] for n in cast})
     except ValueError as e:
         print(f"error: generated script failed validation: {e}", file=sys.stderr)
         print(f"raw output kept at {dest} - fix it by hand or rerun", file=sys.stderr)

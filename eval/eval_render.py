@@ -52,12 +52,12 @@ STYLED_SCRIPT = (
     "script file itself.\n"
 )
 DIALOGUE_SCRIPT = (
-    "speakers: A=en-US-BrianNeural, B=en-US-JennyNeural\n"
+    "cast: grump, hype\n"
     "---\n"
-    "A: Wait, this thing does dialogue now?\n"
-    "B: Two voices, one video, and my words show up in yellow.\n"
-    "A: Prove it.\n"
-    "B: You are watching the proof.\n"
+    "grump: Wait, this thing does characters now?\n"
+    "hype: Two personalities, two pitches, and my words show up in yellow!\n"
+    "grump: Prove it, kid.\n"
+    "hype: You are watching the proof right now!\n"
 )
 BG_SECONDS = 90
 MIN_EVENTS = 10
@@ -186,8 +186,9 @@ def main() -> int:
 
     ass_d = (temp_d / "captions.ass").read_text(encoding="utf-8")
     yellow = "{\\c" + br.COLORS["yellow"] + "}"
-    check("D speaker colors", yellow in ass_d,
-          "speaker B words carry the yellow override tag")
+    orange = "{\\c" + br.COLORS["orange"] + "}"
+    check("D speaker colors", yellow in ass_d and orange in ass_d,
+          "hype yellow + grump orange override tags both present")
     wav = temp_d / "voice.wav"
     parts = sorted(temp_d.glob("part_*.mp3"))
     joined = br.probe_duration(wav)
@@ -200,9 +201,11 @@ def main() -> int:
           vd is not None and (vd["width"], vd["height"]) == (br.OUT_W, br.OUT_H),
           f"{vd['width']}x{vd['height']}")
 
-    # ---- phase E: every preset voice synthesizes -----------------------------
+    # ---- phase E: every preset and character voice synthesizes ---------------
     styles = br.load_styles()
-    voices = sorted({dict(br.DEFAULTS, **s)["voice"] for s in styles.values()})
+    voices = sorted(
+        {dict(br.DEFAULTS, **s)["voice"] for s in styles.values()}
+        | {c["voice"] for c in br.load_characters().values()})
     bad = []
     for v in voices:
         try:

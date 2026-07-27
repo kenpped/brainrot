@@ -133,6 +133,34 @@ B: Because nobody wants to admit it works.
 
 See `scripts/phone-bowl-speaker.txt` for a full example.
 
+## Characters (the Peter-and-Stewie format, minus the lawsuit)
+
+`characters.json` defines named personas: voice + pitch shift + speed bump +
+caption color + a personality the AI writes dialogue in. Shipped cast:
+`grump`, `hype`, `posh`, `deadpan`, `brat`. Use them in a script:
+
+```
+cast: grump, hype
+---
+grump: Wait, this thing does characters now?
+hype: Two personalities, two pitches, and my words show up in yellow!
+```
+
+Or let the AI write in-character:
+
+```
+python write_script.py "why pigeons fear nobody" --cast grump,hype
+```
+
+On the site, tick "2 characters" and pick the matchup. Add your own
+characters by editing the json (gate tests validate it); pitch is what makes
+stock voices sound like different people (`-18Hz` old man, `+14Hz` hyper kid).
+
+Deliberately NOT included: cloned celebrity or cartoon voices (Peter
+Griffin, Obama, etc.). Those are a real person's voice used without consent,
+and they're the number one thing that gets brainrot channels struck and
+banned. Original characters are yours forever.
+
 ## Voices
 
 ```
