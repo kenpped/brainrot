@@ -203,6 +203,22 @@ def test_load_script_empty_raises(tmp_path):
         br.load_script(f)
 
 
+# ---- render fail-fast ------------------------------------------------------
+
+def test_render_validates_background_before_tts(tmp_path, monkeypatch):
+    """A bad --bg path must fail instantly, not after 40s of TTS + whisper."""
+    script = tmp_path / "s.txt"
+    script.write_text("hello", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("TTS ran before background validation")
+
+    monkeypatch.setattr(br, "synth_voiceover", boom)
+    monkeypatch.setattr(br.shutil, "which", lambda _: "ffmpeg")  # not the check under test
+    with pytest.raises(ValueError, match="background not found"):
+        br.render(script, tmp_path / "missing.mp4", tmp_path / "o.mp4")
+
+
 # ---- CLI validation --------------------------------------------------------
 
 def test_rate_regex():

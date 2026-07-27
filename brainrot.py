@@ -253,6 +253,7 @@ def render(
             "ffmpeg not found. Install it (winget install Gyan.FFmpeg) or set FFMPEG_BIN."
         )
     text = load_script(Path(script_path))
+    backgrounds = list_backgrounds(Path(bg))  # fail fast, before the slow TTS/whisper steps
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -276,7 +277,7 @@ def render(
         print(f"[2/4] captions   {len(words)} words (whisper {WHISPER_MODEL})", flush=True)
 
         rng = random.Random(seed)
-        bg_file = rng.choice(list_backgrounds(Path(bg)))
+        bg_file = rng.choice(backgrounds)
         bg_dur = probe_duration(bg_file)
         need = audio_dur + TAIL_PAD
         offset, loop = choose_clip(bg_dur, need, rng)
