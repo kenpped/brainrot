@@ -94,12 +94,33 @@ DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
 SPEAKER_PALETTE = ["white", "yellow", "cyan", "lime", "pink"]  # caption color per speaker
 
 
+_TOOL_CACHE: dict[str, str] = {}
+
+
+def _discover_tool(tool: str) -> str:
+    """Find ffmpeg/ffprobe: env override, then PATH, then the winget install
+    (a terminal opened before `winget install Gyan.FFmpeg` has a stale PATH)."""
+    env = os.environ.get(f"{tool.upper()}_BIN")
+    if env:
+        return env
+    if tool in _TOOL_CACHE:
+        return _TOOL_CACHE[tool]
+    path = shutil.which(tool)
+    if path is None and sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+        hits = sorted(base.glob(f"Gyan.FFmpeg*/*/bin/{tool}.exe")) if base.exists() else []
+        if hits:
+            path = str(hits[-1])
+    _TOOL_CACHE[tool] = path or tool
+    return _TOOL_CACHE[tool]
+
+
 def ffmpeg_bin() -> str:
-    return os.environ.get("FFMPEG_BIN", "ffmpeg")
+    return _discover_tool("ffmpeg")
 
 
 def ffprobe_bin() -> str:
-    return os.environ.get("FFPROBE_BIN", "ffprobe")
+    return _discover_tool("ffprobe")
 
 
 # ---- styles and script parsing (gate-tested, no deps) ----------------------

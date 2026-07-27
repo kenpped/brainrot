@@ -480,6 +480,40 @@ def test_choose_clip_short_background_loops():
     assert loop is True
 
 
+# ---- ffmpeg discovery ------------------------------------------------------
+
+def test_tool_env_override_wins(monkeypatch):
+    monkeypatch.setenv("FFMPEG_BIN", r"C:\custom\ffmpeg.exe")
+    assert br.ffmpeg_bin() == r"C:\custom\ffmpeg.exe"
+
+
+def test_tool_falls_back_to_winget_install(monkeypatch, tmp_path):
+    fake = tmp_path / "Microsoft" / "WinGet" / "Packages" / \
+        "Gyan.FFmpeg_x" / "ffmpeg-9.0-full_build" / "bin"
+    fake.mkdir(parents=True)
+    (fake / "ffmpeg.exe").write_bytes(b"x")
+    monkeypatch.delenv("FFMPEG_BIN", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(br.shutil, "which", lambda _: None)
+    monkeypatch.setattr(br.sys, "platform", "win32")
+    br._TOOL_CACHE.clear()
+    try:
+        assert br.ffmpeg_bin() == str(fake / "ffmpeg.exe")
+    finally:
+        br._TOOL_CACHE.clear()
+
+
+def test_tool_bare_name_when_nothing_found(monkeypatch, tmp_path):
+    monkeypatch.delenv("FFPROBE_BIN", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(br.shutil, "which", lambda _: None)
+    br._TOOL_CACHE.clear()
+    try:
+        assert br.ffprobe_bin() == "ffprobe"
+    finally:
+        br._TOOL_CACHE.clear()
+
+
 # ---- fonts -----------------------------------------------------------------
 
 @pytest.mark.skipif(sys.platform != "win32", reason="registry check is Windows-only")

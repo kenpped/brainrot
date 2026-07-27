@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brainrot studio</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #141824; --panel2: #1b2032; --line: #262d42;
+    --text: #e8ecf6; --muted: #8b93ab; --gold: #ffd60a; --hot: #ff3d68;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  header { padding: 18px 28px; border-bottom: 1px solid var(--line);
+           display: flex; align-items: baseline; gap: 12px; }
+  header h1 { font-family: Impact, system-ui; font-size: 26px; letter-spacing: .5px;
+              background: linear-gradient(90deg, var(--gold), var(--hot));
+              -webkit-background-clip: text; background-clip: text; color: transparent; }
+  header span { color: var(--muted); font-size: 13px; }
+  main { display: grid; grid-template-columns: minmax(340px, 520px) 1fr;
+         gap: 24px; padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border: 1px solid var(--line);
+            border-radius: 14px; padding: 20px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 1.5px;
+       color: var(--muted); margin: 18px 0 10px; }
+  h2:first-child { margin-top: 0; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input[type=text], textarea, select {
+    width: 100%; background: var(--panel2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px;
+    font: inherit; }
+  textarea { resize: vertical; min-height: 170px; margin-top: 8px;
+             font: 13px/1.5 Consolas, monospace; }
+  label.check { display: flex; gap: 6px; align-items: center; color: var(--muted);
+                font-size: 13px; white-space: nowrap; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .grid label { font-size: 12px; color: var(--muted); display: block; }
+  .grid label > * { margin-top: 4px; }
+  button { border: 0; border-radius: 8px; padding: 9px 14px; font: inherit;
+           font-weight: 600; cursor: pointer; background: var(--panel2);
+           color: var(--text); border: 1px solid var(--line); white-space: nowrap; }
+  button:hover { border-color: var(--gold); }
+  button.primary { width: 100%; margin-top: 14px; padding: 13px; font-size: 16px;
+                   background: linear-gradient(90deg, var(--gold), var(--hot));
+                   color: #14100a; border: 0; }
+  button.primary:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .status { font-size: 13px; color: var(--muted); margin-top: 8px; min-height: 18px; }
+  .status.err { color: var(--hot); }
+  .job { display: flex; gap: 10px; align-items: center; padding: 9px 12px;
+         border: 1px solid var(--line); border-radius: 10px; margin-bottom: 8px;
+         font-size: 13px; }
+  .job .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis;
+               white-space: nowrap; }
+  .job .last { color: var(--muted); flex: 1; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  .chip { font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 99px;
+          text-transform: uppercase; letter-spacing: .5px; }
+  .chip.queued  { background: #2a3050; color: #9fb0ff; }
+  .chip.running { background: #3a2f10; color: var(--gold); }
+  .chip.done    { background: #123a26; color: #4ade80; }
+  .chip.failed  { background: #43101d; color: var(--hot); }
+  #gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+             gap: 14px; }
+  .card { background: var(--panel2); border: 1px solid var(--line);
+          border-radius: 12px; overflow: hidden; }
+  .card video { width: 100%; aspect-ratio: 9/16; display: block; background: #000; }
+  .card .meta { padding: 8px 10px; font-size: 12px; color: var(--muted);
+                overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<header><h1>BRAINROT STUDIO</h1><span>script in, 9:16 banger out - runs 100% on this PC</span></header>
+<main>
+  <section>
+    <h2>1 · script</h2>
+    <div class="row">
+      <input type="text" id="topic" placeholder='topic, e.g. "why school is a scam"'>
+      <label class="check"><input type="checkbox" id="dialogue"> 2 voices</label>
+      <button id="writeBtn">write with AI</button>
+    </div>
+    <textarea id="script" spellcheck="false"
+placeholder="...or write/paste the script here.
+
+optional front matter, closed by ---
+  voice: en-US-BrianNeural
+  style: hype
+  bg: minecraft
+
+dialogue mode:
+  speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
+  ---
+  A: first line
+  B: reply"></textarea>
+    <div class="status" id="writeStatus"></div>
+
+    <h2>2 · look + sound</h2>
+    <div class="grid">
+      <label>style <select id="style"></select></label>
+      <label>voice <select id="voice"><option value="">style default</option></select></label>
+      <label>speed <select id="rate">
+        <option value="">style default</option>
+        <option>+10%</option><option>+15%</option><option>+18%</option>
+        <option>+22%</option><option>+28%</option><option>+35%</option>
+      </select></label>
+      <label>font <input type="text" id="font" placeholder="style default"></label>
+      <label>background <select id="bg"><option value="">any folder</option></select></label>
+    </div>
+    <button class="primary" id="go">&#9889; generate video</button>
+    <div class="status" id="goStatus"></div>
+  </section>
+
+  <section>
+    <h2>jobs</h2>
+    <div id="jobs"><div class="empty">nothing yet - generate something</div></div>
+    <h2>videos</h2>
+    <div id="gallery"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const opts = () => ({
+  style: $("style").value, voice: $("voice").value, rate: $("rate").value,
+  font: $("font").value.trim(), bg_tag: $("bg").value,
+});
+
+async function jfetch(url, body) {
+  const res = await fetch(url, body === undefined ? {} : {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+
+async function loadConfig() {
+  const cfg = await jfetch("/api/config");
+  $("style").innerHTML = Object.keys(cfg.styles).sort()
+    .map(n => `<option ${n === "default" ? "selected" : ""}>${n}</option>`).join("");
+  $("voice").innerHTML = '<option value="">style default</option>' +
+    cfg.voices.map(v => `<option value="${v.voice}">${v.voice.replace("Neural","")} - ${v.vibe}</option>`).join("");
+  $("bg").innerHTML = '<option value="">any folder</option>' +
+    cfg.bg_tags.map(t => `<option>${t}</option>`).join("");
+}
+
+async function writeAI() {
+  const topic = $("topic").value.trim();
+  const st = $("writeStatus");
+  if (!topic) { st.textContent = "type a topic first"; st.className = "status err"; return; }
+  $("writeBtn").disabled = true;
+  st.className = "status"; st.textContent = "asking your local Claude...";
+  try {
+    const {id} = await jfetch("/api/write", {
+      topic, dialogue: $("dialogue").checked,
+      style: $("style").value, bg_tag: $("bg").value,
+    });
+    for (;;) {
+      await new Promise(r => setTimeout(r, 1500));
+      const j = await jfetch("/api/jobs/" + id);
+      if (j.state === "done") { $("script").value = j.out.trim(); st.textContent = "script ready - edit it, then generate"; break; }
+      if (j.state === "failed") { st.className = "status err"; st.textContent = j.error; break; }
+      st.textContent = "writing... (" + j.state + ")";
+    }
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  $("writeBtn").disabled = false;
+  refresh();
+}
+
+async function generate() {
+  const st = $("goStatus");
+  const script = $("script").value.trim();
+  if (!script) { st.className = "status err"; st.textContent = "script is empty"; return; }
+  $("go").disabled = true; st.className = "status"; st.textContent = "queueing...";
+  try {
+    await jfetch("/api/render", {script, ...opts()});
+    st.textContent = "queued - watch the jobs panel";
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  $("go").disabled = false;
+  refresh();
+}
+
+let hadActive = false;
+async function refresh() {
+  const jobs = await jfetch("/api/jobs");
+  const box = $("jobs");
+  if (jobs.length) box.innerHTML = jobs.map(j => `
+    <div class="job">
+      <span class="chip ${j.state}">${j.state}</span>
+      <span class="name">${j.name}</span>
+      <span class="last">${j.state === "failed" ? j.error : j.last}</span>
+    </div>`).join("");
+  const active = jobs.some(j => j.state === "queued" || j.state === "running");
+  if (!active && hadActive || !$("gallery").childElementCount) {
+    const vids = await jfetch("/api/videos");
+    $("gallery").innerHTML = vids.length ? vids.map(v => `
+      <div class="card">
+        <video src="/video/${encodeURIComponent(v.name)}" controls preload="metadata"></video>
+        <div class="meta">${v.name} · ${v.mb} MB</div>
+      </div>`).join("") : '<div class="empty">no videos yet</div>';
+  }
+  hadActive = active;
+}
+
+$("writeBtn").onclick = writeAI;
+$("go").onclick = generate;
+$("topic").addEventListener("keydown", e => { if (e.key === "Enter") writeAI(); });
+loadConfig().then(refresh);
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

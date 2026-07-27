@@ -1,8 +1,20 @@
 # brainrot pipeline
 
 Script in, 9:16 narrated video with word-by-word captions out. No subscriptions.
-Monologues or two-voice dialogues, style presets, per-script overrides, and a
-topic-to-script generator that runs on your local Claude Code.
+Monologues or two-voice dialogues, style presets, per-script overrides, a
+topic-to-script generator that runs on your local Claude Code, and a local
+web studio so you never have to touch the terminal.
+
+## The website (easiest way to use all of it)
+
+```
+python webapp.py
+```
+
+Open http://127.0.0.1:8765 — type a topic (AI writes the script) or paste
+your own, pick style / voice / speed / background, hit generate. Jobs run one
+at a time with live progress; finished videos play in the gallery on the
+right. Local only: binds 127.0.0.1, nothing is uploaded anywhere.
 
 ## Setup
 
@@ -37,13 +49,15 @@ pip install -r requirements.txt
 
 ```
 project/
+  webapp.py         <- the website (python webapp.py -> localhost:8765)
+  web/index.html    <- its page
   brainrot.py       <- render one video
   batch.py          <- render a folder of scripts
   write_script.py   <- topic -> script, via local Claude Code
   voices.py         <- browse + preview voices
   make_bg.py        <- generate copyright-free backgrounds
   styles.json       <- style presets
-  scripts/          <- one .txt per video
+  scripts/          <- one .txt per video (web/ subfolder = site-made)
   backgrounds/      <- gameplay loops, organized by tag subfolder
     minecraft/
     subway/
@@ -175,6 +189,9 @@ python -m pytest tests -q
 # eval: real edge-tts + whisper + ffmpeg renders, checked with ffprobe --
 # run before ship or after touching the render path (needs network)
 python eval/eval_render.py
+
+# eval: a real render driven through the web app (worker, HTTP, Range serving)
+python eval/eval_webapp.py
 ```
 
 The eval renders four things (default style, front-matter overrides,
