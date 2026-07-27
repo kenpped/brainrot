@@ -2,31 +2,17 @@ speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
 style: hype
 bg: synthetic
 ---
-Write permission wasn't granted in this session, so here's the script. Save it as `scripts/radioactive-banana.txt` â€” it's in the dialogue format from `scripts/phone-bowl-speaker.txt:1`.
-
-speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
-style: hype
----
-A: Do not eat that banana.
-B: It is a banana.
-A: It is radioactive.
-B: You are being dramatic.
-A: Every banana has potassium forty in it. That is a radioactive isotope. It is decaying in your hand right now.
-B: Okay but a tiny amount.
-A: Scientists literally measure radiation leaks in bananas. They call it the banana equivalent dose.
-B: That is not a real unit.
-A: It is a real unit. A cross country flight is about a hundred bananas. A dental x-ray, about fifty.
-B: So bananas are basically safe.
-A: Bananas are completely safe. Your body flushes the potassium out in hours.
-B: Then why did you tell me not to eat it?
-A: Because your body already runs on potassium. You are made of the same isotope. You have been radioactive your entire life.
-B: I am going to go lie down.
-A: Do not. Lying next to another person doubles your dose.
-
-135 words, 16 lines, roughly 40 seconds at the `hype` rate of +28%. Cold-open on a command, B plays skeptic so A can land facts as rebuttals, twist at "you are made of the same isotope," button line for the loop.
-
-Facts check out: K-40 is ~0.012% of natural potassium, banana equivalent dose â‰ˆ 0.1 ÂµSv, a transcontinental flight â‰ˆ 40 ÂµSv, a dental x-ray â‰ˆ 5 ÂµSv, and sleeping next to someone is the standard BED joke (~0.05 ÂµSv/night). A â‰ˆ 4400 K-40 decays per second in an adult body, which is why the "you're already radioactive" turn is true, not clickbait.
-
-One thing to fix while you're in there: `scripts/brain-function.txt` and `scripts/web/brain-function.txt` (both untracked) have chat prose baked into the script body â€” lines 3, 7, and 9 are commentary, not narration. They'll get read aloud as-is. Delete those two files or strip everything but line 5.
-
-Next: `python brainrot.py scripts/radioactive-banana.txt` once the file is saved.
+A: My phone hit 40 percent in the cold and just died. Is it lying to me?
+B: Nope. Your battery is basically a slushie right now.
+A: A slushie.
+B: Lithium batteries move charge through a liquid. Cold makes that liquid thick and slow.
+A: So the power just... stops?
+B: The power is still in there. It just can't get out fast enough.
+A: Then why does the percentage crash?
+B: Your phone guesses charge from voltage. Cold drops voltage, so it guesses low and panics.
+A: Okay but mine came back to 30 percent inside. That's fake.
+B: That's the proof. Warm it up, the chemistry speeds up, the real number returns.
+A: So I didn't lose the battery.
+B: You lost access to it. Keep the phone in an inside pocket, not your outside one.
+A: Body heat as a charger.
+B: Body heat as a translator.

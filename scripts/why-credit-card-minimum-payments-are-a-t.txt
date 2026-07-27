@@ -1,0 +1,16 @@
+speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
+---
+A: Paying the minimum every month keeps you in good standing, right?
+B: In good standing with them. In debt forever with you.
+A: It's the number the bank prints. Why would they lowball me?
+B: Because the minimum is mostly interest. Barely any touches the balance.
+A: How bad can that actually be?
+B: Five thousand dollars at twenty-four percent, minimum only? Roughly twenty years.
+A: Twenty years? Come on, that's fear-mongering.
+B: Run the math. You'd pay thousands extra just in interest.
+A: So the minimum isn't a payment plan.
+B: It's a leash. It's designed to keep the balance alive.
+A: Okay. So what do I actually do?
+B: Pay anything above the minimum. Every extra dollar hits the principal.
+A: And if money's tight?
+B: Pay the minimum, then attack the highest rate first. Never treat it as done.

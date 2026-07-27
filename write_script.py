@@ -152,11 +152,15 @@ def ask_claude(prompt: str, timeout: int = 300) -> str:
         raise RuntimeError(
             "claude CLI not found on PATH - install Claude Code or write the script by hand"
         )
-    # empty temp cwd = no CLAUDE.md, no repo to explore, nothing to "help" with
+    # empty temp cwd = no CLAUDE.md, no repo to explore, nothing to "help" with.
+    # Prompt goes via STDIN: the npm claude.cmd shim re-parses argv through
+    # cmd.exe, which truncates the argument at the first newline -- the model
+    # then sees one line of the prompt and no topic at all.
     workdir = tempfile.mkdtemp(prefix="brainrot_ws_")
     proc = subprocess.run(
-        [exe, "-p", prompt], cwd=workdir,
-        capture_output=True, text=True, timeout=timeout, shell=False,
+        [exe, "-p"], input=prompt, cwd=workdir,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=timeout, shell=False,
     )
     if proc.returncode != 0:
         # auth errors land on stdout, so fall back to it when stderr is empty

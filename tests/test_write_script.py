@@ -132,14 +132,39 @@ def test_ask_claude_resolves_shim_and_runs_in_neutral_cwd(monkeypatch):
 
     def fake_run(cmd, **kwargs):
         seen["cmd"], seen["cwd"] = cmd, kwargs.get("cwd")
+        seen["input"] = kwargs.get("input")
         return FakeProc()
 
     monkeypatch.setattr(ws.shutil, "which", lambda _: r"C:\npm\claude.CMD")
     monkeypatch.setattr(ws.subprocess, "run", fake_run)
-    ws.ask_claude("prompt")
+    ws.ask_claude("line one\nline two")
     assert seen["cmd"][0] == r"C:\npm\claude.CMD"
     repo = str(Path(ws.__file__).resolve().parent).lower()
     assert seen["cwd"] is not None and not str(seen["cwd"]).lower().startswith(repo)
+
+
+def test_ask_claude_passes_prompt_via_stdin_not_argv(monkeypatch):
+    """cmd.exe shims truncate argv at the first newline: the model got one
+    line of the prompt and never saw the topic (the banana incident, part 2).
+    Multiline prompts must travel via stdin."""
+    seen = {}
+
+    class FakeProc:
+        returncode = 0
+        stdout = GOOD_REPLY
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"], seen["input"] = cmd, kwargs.get("input")
+        return FakeProc()
+
+    monkeypatch.setattr(ws.shutil, "which", lambda _: "claude.cmd")
+    monkeypatch.setattr(ws.subprocess, "run", fake_run)
+    prompt = "line one\nline two\nline three"
+    ws.ask_claude(prompt)
+    assert seen["input"] == prompt
+    assert all("\n" not in part for part in seen["cmd"])
+    assert prompt not in seen["cmd"]
 
 
 def test_ask_claude_missing_cli_raises(monkeypatch):
