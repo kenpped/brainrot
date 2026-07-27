@@ -79,11 +79,24 @@ def test_scan_bg_tags(tmp_path, monkeypatch):
 
 # ---- routes ----------------------------------------------------------------
 
-def test_config_lists_styles_voices_tags(client):
+def test_config_lists_styles_voices_tags_fonts(client):
     data = client.get("/api/config").get_json()
     assert "default" in data["styles"]
     assert any(v["voice"].startswith("en-") for v in data["voices"])
     assert data["bg_tags"] == ["synthetic"]
+    assert data["fonts"], "font list must not be empty"
+    assert all(f in webapp.POPULAR_FONTS for f in data["fonts"])
+
+
+def test_font_choices_filters_to_installed(monkeypatch):
+    monkeypatch.setattr(webapp.br, "installed_fonts",
+                        lambda: {"Impact (TrueType)", "Georgia (TrueType)"})
+    assert webapp.font_choices() == ["Impact", "Georgia"]
+
+
+def test_font_choices_all_when_no_registry(monkeypatch):
+    monkeypatch.setattr(webapp.br, "installed_fonts", lambda: None)
+    assert webapp.font_choices() == webapp.POPULAR_FONTS
 
 
 def test_render_rejects_empty_script(client):

@@ -129,6 +129,24 @@ def uniquify(path: Path) -> Path:
     raise RuntimeError(f"1000 name collisions for {path}")
 
 
+# caption-suitable fonts that commonly ship with Windows, loudest first;
+# the dropdown only offers the ones actually installed on this machine
+POPULAR_FONTS = [
+    "Impact", "Arial Black", "Bahnschrift", "Franklin Gothic Medium",
+    "Segoe UI Black", "Verdana", "Tahoma", "Trebuchet MS", "Georgia",
+    "Comic Sans MS", "Arial", "Consolas", "Courier New", "Times New Roman",
+]
+
+
+def font_choices() -> list[str]:
+    installed = br.installed_fonts()
+    if installed is None:  # non-Windows: no registry to check, offer them all
+        return POPULAR_FONTS
+    lowered = [n.lower() for n in installed]
+    return [f for f in POPULAR_FONTS
+            if any(n.startswith(f.lower()) for n in lowered)]
+
+
 def scan_bg_tags() -> list[str]:
     if not BG_DIR.is_dir():
         return []
@@ -152,6 +170,7 @@ def api_config():
         "styles": {name: dict(br.DEFAULTS, **s) for name, s in styles.items()},
         "voices": [{"voice": v, "vibe": d} for v, d in CURATED],
         "bg_tags": scan_bg_tags(),
+        "fonts": font_choices(),
     })
 
 

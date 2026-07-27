@@ -10,6 +10,12 @@ nothing extra on a Claude subscription.
 
 The output lands in scripts/<slug>.txt with front matter already filled in,
 so the next step is just brainrot.py / batch.py.
+
+Hardening (learned the hard way): `claude -p` run inside a repo behaves like
+an agent -- it reads files, tries to write them, adds commentary, and can
+wander off topic. So the call runs from an empty temp directory, the script
+must come back between BEGIN SCRIPT / END SCRIPT sentinel lines, the body
+must mention the topic, and one retry happens before giving up.
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -26,8 +33,22 @@ from brainrot import parse_script
 
 DEFAULT_VOICE_A = "en-US-BrianNeural"
 DEFAULT_VOICE_B = "en-US-JennyNeural"
+SENTINEL_BEGIN = "BEGIN SCRIPT"
+SENTINEL_END = "END SCRIPT"
+STOPWORDS = {
+    "why", "your", "you", "the", "a", "an", "is", "are", "was", "in", "on",
+    "of", "to", "for", "and", "or", "it", "at", "my", "our", "their", "his",
+    "her", "its", "do", "does", "how", "what", "when", "so", "that", "this",
+    "with", "from", "about", "than", "into", "some", "more",
+}
 
-MONO_PROMPT = """\
+GUARD = """\
+You are a text generator. Do not read or write files, do not run tools, do
+not explain yourself, and do not add anything before or after the block.
+
+"""
+
+MONO_PROMPT = GUARD + """\
 Write a short script for a vertical brainrot-style video about: {topic}
 
 Rules:
@@ -36,10 +57,15 @@ Rules:
 - short punchy sentences, one idea each
 - a re-hook in the middle, something like "here is the wild part"
 - end with a twist or a call to action
-- no emojis, no hashtags, no stage directions, no markdown, no headings
-- output ONLY the script text, nothing else"""
+- stay strictly on the topic: {topic}
+- no emojis, no hashtags, no stage directions, no markdown
 
-DIALOGUE_PROMPT = """\
+Output EXACTLY this shape and nothing else:
+BEGIN SCRIPT
+<the script text>
+END SCRIPT"""
+
+DIALOGUE_PROMPT = GUARD + """\
 Write a short two-speaker dialogue script for a vertical brainrot-style video
 about: {topic}
 
@@ -51,8 +77,20 @@ Rules:
 - every line starts with exactly "A: " or "B: "
 - A opens with a hook question or a wild claim
 - B explains in punchy plain language; A pushes back at least once
+- stay strictly on the topic: {topic}
 - no emojis, no stage directions, no markdown
-- output ONLY the dialogue lines, nothing else"""
+
+Output EXACTLY this shape and nothing else:
+BEGIN SCRIPT
+A: first line
+B: second line
+END SCRIPT"""
+
+RETRY_SUFFIX = (
+    "\n\nREMINDER: your previous attempt failed validation. Output ONLY the "
+    "BEGIN SCRIPT / END SCRIPT block, on topic, with no commentary, no file "
+    "talk, and no markdown."
+)
 
 
 def slugify(topic: str, max_len: int = 40) -> str:
@@ -69,6 +107,29 @@ def strip_fences(text: str) -> str:
     """Models sometimes wrap output in ``` fences despite instructions."""
     lines = [l for l in text.strip().splitlines() if not l.strip().startswith("```")]
     return "\n".join(lines).strip()
+
+
+def extract_script(raw: str) -> str | None:
+    """The text between the sentinel lines, or None. Everything outside the
+    sentinels (agentic commentary, notes, apologies) is discarded."""
+    m = re.search(
+        rf"^{SENTINEL_BEGIN}\s*$(.*?)^{SENTINEL_END}\s*$",
+        raw, re.DOTALL | re.MULTILINE,
+    )
+    return strip_fences(m.group(1)) if m else None
+
+
+def topic_words(topic: str) -> list[str]:
+    return [w for w in re.findall(r"[a-z']+", topic.lower())
+            if len(w) >= 4 and w not in STOPWORDS]
+
+
+def on_topic(body: str, topic: str) -> bool:
+    """Cheap drift detector: at least one content word of the topic must
+    appear in the script. Caught a real case of Claude writing about
+    radioactive bananas when asked about phone batteries."""
+    words = topic_words(topic)
+    return not words or any(w in body.lower() for w in words)
 
 
 def build_front_matter(dialogue: bool, style: str | None, bg: str | None,
@@ -91,15 +152,41 @@ def ask_claude(prompt: str, timeout: int = 300) -> str:
         raise RuntimeError(
             "claude CLI not found on PATH - install Claude Code or write the script by hand"
         )
+    # empty temp cwd = no CLAUDE.md, no repo to explore, nothing to "help" with
+    workdir = tempfile.mkdtemp(prefix="brainrot_ws_")
     proc = subprocess.run(
-        [exe, "-p", prompt],
+        [exe, "-p", prompt], cwd=workdir,
         capture_output=True, text=True, timeout=timeout, shell=False,
     )
     if proc.returncode != 0:
         # auth errors land on stdout, so fall back to it when stderr is empty
         detail = proc.stderr.strip() or proc.stdout.strip()[:300]
         raise RuntimeError(f"claude -p failed ({proc.returncode}): {detail}")
-    return strip_fences(proc.stdout)
+    return proc.stdout
+
+
+def generate(topic: str, dialogue: bool, attempts: int = 2) -> str:
+    """Ask, validate, retry once, or fail loudly with the raw reply."""
+    prompt = build_prompt(topic, dialogue)
+    last_raw, last_reason = "", "no attempt made"
+    for i in range(attempts):
+        raw = ask_claude(prompt if i == 0 else prompt + RETRY_SUFFIX)
+        last_raw = raw
+        body = extract_script(raw)
+        if body is None:
+            last_reason = "no BEGIN SCRIPT / END SCRIPT block"
+            continue
+        if len(body.split()) < 40:
+            last_reason = f"only {len(body.split())} words"
+            continue
+        if not on_topic(body, topic):
+            last_reason = "script ignores the topic"
+            continue
+        return body
+    preview = " ".join(last_raw.split())[:200]
+    raise RuntimeError(
+        f"Claude returned invalid script output twice ({last_reason}). "
+        f"Reply started: {preview!r}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -118,12 +205,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"asking local Claude for a {'dialogue' if args.dialogue else 'monologue'} "
           f"about: {args.topic}", flush=True)
     try:
-        body = ask_claude(build_prompt(args.topic, args.dialogue))
+        body = generate(args.topic, args.dialogue)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
-        return 1
-    if len(body.split()) < 40:
-        print(f"error: Claude returned suspiciously little text:\n{body}", file=sys.stderr)
         return 1
 
     front = build_front_matter(args.dialogue, args.style, args.bg,

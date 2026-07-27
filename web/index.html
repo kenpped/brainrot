@@ -106,9 +106,12 @@ dialogue mode:
         <option>+10%</option><option>+15%</option><option>+18%</option>
         <option>+22%</option><option>+28%</option><option>+35%</option>
       </select></label>
-      <label>font <input type="text" id="font" placeholder="style default"></label>
+      <label>font <select id="font"><option value="">style default</option></select></label>
       <label>background <select id="bg"><option value="">any folder</option></select></label>
     </div>
+    <div id="fontPreview" style="margin-top:10px;padding:10px 12px;border:1px solid var(--line);
+         border-radius:8px;background:var(--panel2);font-family:Impact;font-size:26px;
+         letter-spacing:.5px;text-align:center;">FONT PREVIEW +1</div>
     <button class="primary" id="go">&#9889; generate video</button>
     <div class="status" id="goStatus"></div>
   </section>
@@ -137,14 +140,26 @@ async function jfetch(url, body) {
   return data;
 }
 
+let CFG = null;
 async function loadConfig() {
   const cfg = await jfetch("/api/config");
+  CFG = cfg;
   $("style").innerHTML = Object.keys(cfg.styles).sort()
     .map(n => `<option ${n === "default" ? "selected" : ""}>${n}</option>`).join("");
   $("voice").innerHTML = '<option value="">style default</option>' +
     cfg.voices.map(v => `<option value="${v.voice}">${v.voice.replace("Neural","")} - ${v.vibe}</option>`).join("");
   $("bg").innerHTML = '<option value="">any folder</option>' +
     cfg.bg_tags.map(t => `<option>${t}</option>`).join("");
+  $("font").innerHTML = '<option value="">style default</option>' +
+    cfg.fonts.map(f => `<option style="font-family:'${f}'">${f}</option>`).join("");
+}
+
+function previewFont() {
+  const styleFont = CFG?.styles?.[$("style").value]?.font || "Impact";
+  const font = $("font").value || styleFont;
+  $("fontPreview").style.fontFamily = `'${font}'`;
+  $("fontPreview").textContent = font.toUpperCase() +
+    ($("font").value ? " +1" : " (STYLE DEFAULT) +1");
 }
 
 async function writeAI() {
@@ -208,7 +223,9 @@ async function refresh() {
 $("writeBtn").onclick = writeAI;
 $("go").onclick = generate;
 $("topic").addEventListener("keydown", e => { if (e.key === "Enter") writeAI(); });
-loadConfig().then(refresh);
+$("font").addEventListener("change", previewFont);
+$("style").addEventListener("change", previewFont);
+loadConfig().then(() => { previewFont(); refresh(); });
 setInterval(refresh, 2000);
 </script>
 </body>
