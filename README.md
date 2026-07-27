@@ -136,8 +136,9 @@ See `scripts/phone-bowl-speaker.txt` for a full example.
 ## Characters (the Peter-and-Stewie format, minus the lawsuit)
 
 `characters.json` defines named personas: voice + pitch shift + speed bump +
-caption color + a personality the AI writes dialogue in. Shipped cast:
-`grump`, `hype`, `posh`, `deadpan`, `brat`. Use them in a script:
+caption color + optional voice effect + a personality the AI writes dialogue
+in. Shipped cast: `grump`, `hype`, `posh`, `deadpan`, `brat`, `botto` (robot
+voice), `demon` (pitched-down demon voice). Use them in a script:
 
 ```
 cast: grump, hype
@@ -156,10 +157,27 @@ On the site, tick "2 characters" and pick the matchup. Add your own
 characters by editing the json (gate tests validate it); pitch is what makes
 stock voices sound like different people (`-18Hz` old man, `+14Hz` hyper kid).
 
+### Voice effects (free cartoon voices without cloning anyone)
+
+`fx` runs an ffmpeg filter over the voiceover after TTS: `robot`, `demon`,
+`chipmunk`, `megaphone`, `radio`, `phone`, `echo`, `none`. Set it per
+character in characters.json or per script for monologues:
+
+```
+fx: robot
+---
+This entire video is narrated by a robot now.
+```
+
+Captions stay accurate because whisper transcribes the clean audio; only the
+video gets the effected track. Combined with `pitch`, this is how you get
+character voices no stock TTS ships, all free and all yours.
+
 Deliberately NOT included: cloned celebrity or cartoon voices (Peter
-Griffin, Obama, etc.). Those are a real person's voice used without consent,
-and they're the number one thing that gets brainrot channels struck and
-banned. Original characters are yours forever.
+Griffin, Obama, etc.), including "free" clone sites like FakeYou. Those are
+a real person's voice used without consent, and they're the number one thing
+that gets brainrot channels struck and banned. Original characters are yours
+forever.
 
 ## Voices
 

@@ -319,14 +319,44 @@ def test_parse_script_cast_needs_two(tmp_path):
 def test_dialogue_line_specs_apply_character_settings():
     cfg = {
         "grump": {"voice": "V-deep", "pitch": "-18Hz", "rate_bump": -8},
-        "hype": {"voice": "V-fast", "pitch": "+14Hz", "rate_bump": 6},
+        "botto": {"voice": "V-bot", "pitch": "+14Hz", "rate_bump": 6, "fx": "robot"},
         "raw": {"voice": "V-plain"},
     }
-    lines = [("grump", "no."), ("hype", "yes!"), ("raw", "hm.")]
+    lines = [("grump", "no."), ("botto", "yes!"), ("raw", "hm.")]
     specs = br.dialogue_line_specs(lines, cfg, "+28%")
-    assert specs[0] == ("no.", "V-deep", "+20%", "-18Hz")
-    assert specs[1] == ("yes!", "V-fast", "+34%", "+14Hz")
-    assert specs[2] == ("hm.", "V-plain", "+28%", "+0Hz")
+    assert specs[0] == ("no.", "V-deep", "+20%", "-18Hz", "none")
+    assert specs[1] == ("yes!", "V-bot", "+34%", "+14Hz", "robot")
+    assert specs[2] == ("hm.", "V-plain", "+28%", "+0Hz", "none")
+
+
+def test_voice_fx_table_sane():
+    assert br.VOICE_FX["none"] == ""
+    for name, chain in br.VOICE_FX.items():
+        if name != "none":
+            assert chain and "," in chain or "=" in chain  # real filter chains
+
+
+def test_apply_voice_fx_none_is_noop(tmp_path, monkeypatch):
+    monkeypatch.setattr(br, "run_checked",
+                        lambda cmd: (_ for _ in ()).throw(AssertionError("ran ffmpeg")))
+    src = tmp_path / "in.mp3"
+    assert br.apply_voice_fx(src, "none", tmp_path / "out.mp3") == src
+
+
+def test_apply_voice_fx_builds_filter_command(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(br, "run_checked", lambda cmd: seen.setdefault("cmd", cmd))
+    out = br.apply_voice_fx(tmp_path / "in.mp3", "demon", tmp_path / "out.mp3")
+    assert out == tmp_path / "out.mp3"
+    cmd = seen["cmd"]
+    assert cmd[cmd.index("-af") + 1] == br.VOICE_FX["demon"]
+
+
+def test_validate_rejects_unknown_fx():
+    with pytest.raises(ValueError, match="fx"):
+        br.validate_style("x", {"fx": "underwater"})
+    with pytest.raises(ValueError, match="fx"):
+        br.validate_character("x", {"voice": "v", "persona": "p", "fx": "underwater"})
 
 
 def test_speaker_color_tags_use_character_colors():

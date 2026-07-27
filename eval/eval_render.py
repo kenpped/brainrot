@@ -201,6 +201,30 @@ def main() -> int:
           vd is not None and (vd["width"], vd["height"]) == (br.OUT_W, br.OUT_H),
           f"{vd['width']}x{vd['height']}")
 
+    # ---- phase F: voice fx track plays, clean track drives captions ----------
+    out_f = outdir / "eval_fx.mp4"
+    temp_f = outdir / "eval_fx_temp"
+    if temp_f.exists():
+        shutil.rmtree(temp_f)
+    temp_f.mkdir(parents=True, exist_ok=True)
+    fx_file = temp_f / "fx_script.txt"
+    fx_file.write_text("fx: robot\n---\n" + SCRIPT_TEXT, encoding="utf-8")
+    br.render(fx_file, bg, out_f, seed=SEED, keep_temp=True)
+
+    clean_dur = br.probe_duration(temp_f / "voice.mp3")
+    fx_dur = br.probe_duration(temp_f / "voice_fx.mp3")
+    check("F fx duration", abs(clean_dur - fx_dur) <= 0.3,
+          f"clean {clean_dur:.2f}s vs fx {fx_dur:.2f}s (captions stay aligned)")
+    ass_f = (temp_f / "captions.ass").read_text(encoding="utf-8")
+    fx_words = set()
+    for line in ass_f.splitlines():
+        if line.startswith("Dialogue:"):
+            fx_words.update(tokens(re.sub(r"\{[^}]*\}", "", line.split(",", 9)[9])))
+    fx_ratio = sum(1 for w in script_words if w in fx_words) / len(script_words)
+    check("F fx captions", fx_ratio >= WORD_MATCH_MIN,
+          f"{fx_ratio:.0%} word match on robot-voiced video "
+          f"(whisper heard the clean track)")
+
     # ---- phase E: every preset and character voice synthesizes ---------------
     styles = br.load_styles()
     voices = sorted(

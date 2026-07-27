@@ -11,6 +11,7 @@ Checks: job runs to done, the mp4 lands in out/, /api/videos lists it,
 """
 
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -32,13 +33,14 @@ def check(name, ok, detail):
 
 
 def main() -> int:
-    # self-sufficient background: tiny synthetic clip if the folder is empty
-    synth = ROOT / "backgrounds" / "synthetic"
-    synth.mkdir(parents=True, exist_ok=True)
-    tiny = synth / "eval_tiny.mp4"
-    if not tiny.exists():
-        make_bg.write_video(tiny, make_bg.gen_balls(8.0, 24, 360, 640, seed=5),
-                            24, 360, 640, int(8 * 24), "eval bg")
+    # isolated background pool: a temp dir, NOT backgrounds/ -- a tiny eval
+    # clip left in the real pool once got random-picked for an actual video
+    bg_root = Path(tempfile.mkdtemp(prefix="brainrot_eval_bg_"))
+    (bg_root / "synthetic").mkdir()
+    tiny = bg_root / "synthetic" / "eval_tiny.mp4"
+    make_bg.write_video(tiny, make_bg.gen_balls(8.0, 24, 360, 640, seed=5),
+                        24, 360, 640, int(8 * 24), "eval bg")
+    webapp.BG_DIR = bg_root
 
     webapp.start_worker()
     client = webapp.app.test_client()

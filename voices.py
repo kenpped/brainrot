@@ -34,6 +34,10 @@ CURATED = [
     ("en-GB-RyanNeural",        "British male, instant class"),
     ("en-GB-SoniaNeural",       "British female, crisp"),
     ("en-AU-WilliamNeural",     "Australian male, laid back"),
+    ("en-AU-NatashaNeural",     "Australian female, bright"),
+    ("en-IE-ConnorNeural",      "Irish male, warm storyteller"),
+    ("en-NG-AbeoNeural",        "Nigerian male, big presence"),
+    ("en-IN-PrabhatNeural",     "Indian male, clear and quick"),
 ]
 
 DEFAULT_SAMPLE = "Your brain is running a scam on you right now, and nobody talks about it."

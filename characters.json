@@ -33,5 +33,21 @@
     "rate_bump": 4,
     "color": "pink",
     "persona": "a scheming little genius kid who corrects adults with obvious delight and always gets the last word"
+  },
+  "botto": {
+    "voice": "en-US-EricNeural",
+    "pitch": "-4Hz",
+    "rate_bump": -2,
+    "color": "lime",
+    "fx": "robot",
+    "persona": "a literal robot who takes everything catastrophically literally, reports its own emotions like system logs, and is quietly convinced it is the superior lifeform"
+  },
+  "demon": {
+    "voice": "en-US-ChristopherNeural",
+    "pitch": "-10Hz",
+    "rate_bump": -4,
+    "color": "red",
+    "fx": "demon",
+    "persona": "an ancient demon who is weirdly supportive and encouraging but phrases absolutely everything like a dark bargain or a curse"
   }
 }

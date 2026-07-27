@@ -69,6 +69,22 @@ PITCH_RE = re.compile(r"^[+-]\d+Hz$")
 STYLES_FILE = Path(__file__).resolve().parent / "styles.json"
 CHARACTERS_FILE = Path(__file__).resolve().parent / "characters.json"
 
+# voice effects: ffmpeg audio filter chains applied AFTER TTS. Captions are
+# built from the clean audio (whisper hears normal speech); the effected
+# audio is what lands in the video. Chains must preserve duration so the
+# word timings still line up. 24000 = edge-tts output sample rate.
+VOICE_FX = {
+    "none": "",
+    "radio": "highpass=f=400,lowpass=f=3000,volume=1.3",
+    "phone": "highpass=f=300,lowpass=f=3400",
+    "megaphone": "highpass=f=600,lowpass=f=2600,acrusher=bits=12:mode=log:aa=1,volume=1.4",
+    "robot": ("afftfilt=real='hypot(re,im)*sin(0)':imag='hypot(re,im)*cos(0)'"
+              ":win_size=512:overlap=0.75"),
+    "demon": "asetrate=24000*0.82,aresample=24000,atempo=1.2195,volume=1.2",
+    "chipmunk": "asetrate=24000*1.28,aresample=24000,atempo=0.78125",
+    "echo": "aecho=0.8:0.6:40:0.22",
+}
+
 # ASS colors are &HBBGGRR& (blue-green-red, not RGB)
 COLORS = {
     "white": "&HFFFFFF&",
@@ -84,6 +100,7 @@ DEFAULTS = {
     "voice": DEFAULT_VOICE,
     "rate": DEFAULT_RATE,
     "pitch": "+0Hz",
+    "fx": "none",
     "font": DEFAULT_FONT,
     "fontsize": 130,
     "outline": 9,
@@ -148,6 +165,8 @@ def validate_style(name: str, s: dict) -> None:
     if "pitch" in s and not PITCH_RE.match(str(s["pitch"])):
         raise ValueError(f"style '{name}': pitch must look like -15Hz or +20Hz, "
                          f"got {s['pitch']!r}")
+    if "fx" in s and s["fx"] not in VOICE_FX:
+        raise ValueError(f"style '{name}': fx must be one of {sorted(VOICE_FX)}")
 
 
 def load_styles(path: Path | None = None) -> dict:
@@ -161,7 +180,7 @@ def load_styles(path: Path | None = None) -> dict:
 
 
 def validate_character(name: str, c: dict) -> None:
-    allowed = {"voice", "pitch", "rate_bump", "color", "persona"}
+    allowed = {"voice", "pitch", "rate_bump", "color", "persona", "fx"}
     unknown = set(c) - allowed
     if unknown:
         raise ValueError(f"character '{name}': unknown keys {sorted(unknown)}")
@@ -178,6 +197,8 @@ def validate_character(name: str, c: dict) -> None:
         raise ValueError(f"character '{name}': rate_bump must be an int in -40..40")
     if "color" in c and c["color"] not in COLORS:
         raise ValueError(f"character '{name}': color must be one of {sorted(COLORS)}")
+    if "fx" in c and c["fx"] not in VOICE_FX:
+        raise ValueError(f"character '{name}': fx must be one of {sorted(VOICE_FX)}")
 
 
 def load_characters(path: Path | None = None) -> dict:
@@ -342,9 +363,10 @@ def dialogue_line_specs(
     lines: list[tuple[str, str]],
     speakers_cfg: dict,
     base_rate: str,
-) -> list[tuple[str, str, str, str]]:
-    """Per line: (text, voice, rate, pitch). Characters bend the base rate
-    with rate_bump and bring their own pitch; raw speakers use defaults."""
+) -> list[tuple[str, str, str, str, str]]:
+    """Per line: (text, voice, rate, pitch, fx). Characters bend the base
+    rate with rate_bump and bring their own pitch and voice effect; raw
+    speakers use defaults."""
     specs = []
     for name, text in lines:
         c = speakers_cfg[name]
@@ -353,6 +375,7 @@ def dialogue_line_specs(
             c["voice"],
             bump_rate(base_rate, c.get("rate_bump", 0)),
             c.get("pitch", "+0Hz"),
+            c.get("fx", "none"),
         ))
     return specs
 
@@ -583,6 +606,21 @@ def run_checked(cmd: list[str]) -> str:
     return proc.stdout
 
 
+def apply_voice_fx(in_path: Path, fx: str, out_path: Path) -> Path:
+    """Run one VOICE_FX chain over an audio file. 'none' is a no-op that
+    returns the input path untouched."""
+    chain = VOICE_FX[fx]
+    if not chain:
+        return in_path
+    run_checked([
+        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(in_path), "-af", chain,
+        "-ar", "24000", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "48k",
+        str(out_path),
+    ])
+    return out_path
+
+
 def probe_duration(path: Path) -> float:
     out = run_checked([
         ffprobe_bin(), "-v", "error",
@@ -605,22 +643,41 @@ def synth_voiceover(text: str, voice: str, rate: str, mp3_path: Path,
     asyncio.run(_run())
 
 
+def _concat_parts(paths: list[Path], silence: Path, list_file: Path,
+                  out_wav: Path) -> None:
+    entries = []
+    for i, p in enumerate(paths):
+        entries.append(f"file '{p.as_posix()}'")
+        if i < len(paths) - 1:
+            entries.append(f"file '{silence.as_posix()}'")
+    list_file.write_text("\n".join(entries) + "\n", encoding="utf-8")
+    run_checked([
+        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "concat", "-safe", "0", "-i", str(list_file),
+        "-ar", "24000", "-ac", "1", str(out_wav),
+    ])
+
+
 def synth_dialogue(
     lines: list[tuple[str, str]],
     speakers_cfg: dict,
     rate: str,
     workdir: Path,
-    out_wav: Path,
-) -> list[tuple[str, float]]:
+    out_clean: Path,
+    out_fx: Path,
+) -> tuple[list[tuple[str, float]], bool]:
     """Synth each dialogue line with its speaker's voice/pitch/speed, join
-    them with a short silence gap into one wav. Returns per-line
-    (speaker, seconds) for the caption color timeline."""
+    with short silence gaps. Builds TWO tracks: clean (whisper transcribes
+    this, keeping captions accurate) and effected (what the video plays).
+    Returns (per-line (speaker, seconds), whether any fx was applied)."""
     specs = dialogue_line_specs(lines, speakers_cfg, rate)
-    parts = []
-    for i, ((name, _line), (text, voice, line_rate, pitch)) in enumerate(zip(lines, specs)):
+    parts, fx_parts = [], []
+    for i, ((name, _line), (text, voice, line_rate, pitch, fx)) in enumerate(
+            zip(lines, specs)):
         p = workdir / f"part_{i:03d}.mp3"
         synth_voiceover(text, voice, line_rate, p, pitch=pitch)
         parts.append((name, p, probe_duration(p)))
+        fx_parts.append(apply_voice_fx(p, fx, workdir / f"part_{i:03d}_fx.mp3"))
 
     silence = workdir / "gap.mp3"
     run_checked([
@@ -629,19 +686,12 @@ def synth_dialogue(
         "-t", f"{DIALOGUE_GAP}", "-c:a", "libmp3lame", "-ar", "24000",
         "-b:a", "48k", str(silence),
     ])
-    entries = []
-    for i, (_name, p, _dur) in enumerate(parts):
-        entries.append(f"file '{p.as_posix()}'")
-        if i < len(parts) - 1:
-            entries.append(f"file '{silence.as_posix()}'")
-    concat_list = workdir / "concat.txt"
-    concat_list.write_text("\n".join(entries) + "\n", encoding="utf-8")
-    run_checked([
-        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
-        "-f", "concat", "-safe", "0", "-i", str(concat_list),
-        "-ar", "24000", "-ac", "1", str(out_wav),
-    ])
-    return [(name, dur) for name, _p, dur in parts]
+    _concat_parts([p for _n, p, _d in parts], silence,
+                  workdir / "concat.txt", out_clean)
+    fx_used = any(f != p for f, (_n, p, _d) in zip(fx_parts, parts))
+    if fx_used:
+        _concat_parts(fx_parts, silence, workdir / "concat_fx.txt", out_fx)
+    return [(name, dur) for name, _p, dur in parts], fx_used
 
 
 def transcribe_words(mp3_path: Path) -> list[tuple[str, float, float]]:
@@ -711,14 +761,18 @@ def render(
 
     try:
         if dialogue:
-            voice_path = workdir / "voice.wav"
-            durations = synth_dialogue(dialogue, speakers_cfg, s["rate"],
-                                       workdir, voice_path)
+            voice_path = workdir / "voice.wav"          # clean: whisper hears this
+            voice_fx_path = workdir / "voice_fx.wav"    # effected: video plays this
+            durations, fx_used = synth_dialogue(
+                dialogue, speakers_cfg, s["rate"], workdir,
+                voice_path, voice_fx_path)
+            mux_path = voice_fx_path if fx_used else voice_path
             spans = speaker_spans(durations)
             speaker_tags = speaker_color_tags(list(speakers_cfg), speakers_cfg)
             audio_dur = probe_duration(voice_path)
             who = ", ".join(
                 f"{n}={c['voice']}" + (f"@{c['pitch']}" if c.get("pitch") else "")
+                + (f"+{c['fx']}" if c.get("fx", "none") != "none" else "")
                 for n, c in speakers_cfg.items())
             print(f"[1/4] voiceover  dialogue {len(dialogue)} lines, {who} "
                   f"{s['rate']} -> {audio_dur:.1f}s", flush=True)
@@ -727,9 +781,11 @@ def render(
             voice_path = workdir / "voice.mp3"
             synth_voiceover(text, s["voice"], s["rate"], voice_path,
                             pitch=s["pitch"])
+            mux_path = apply_voice_fx(voice_path, s["fx"], workdir / "voice_fx.mp3")
             audio_dur = probe_duration(voice_path)
-            print(f"[1/4] voiceover  {s['voice']} {s['rate']} (style {style_name}) "
-                  f"-> {audio_dur:.1f}s", flush=True)
+            fx_note = f" fx {s['fx']}" if s["fx"] != "none" else ""
+            print(f"[1/4] voiceover  {s['voice']} {s['rate']}{fx_note} "
+                  f"(style {style_name}) -> {audio_dur:.1f}s", flush=True)
 
         words = transcribe_words(voice_path)
         ass_path = workdir / "captions.ass"
@@ -754,7 +810,7 @@ def render(
             cmd += ["-stream_loop", "-1"]
         cmd += [
             "-ss", f"{offset:.3f}", "-i", str(bg_file),
-            "-i", str(voice_path),
+            "-i", str(mux_path),
             "-t", f"{need:.3f}",
             "-vf", build_filter(ass_path),
             "-map", "0:v:0", "-map", "1:a:0",
