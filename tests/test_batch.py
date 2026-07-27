@@ -35,7 +35,14 @@ def test_plan_jobs_skips_existing_nonempty(tmp_path):
     assert [j.skip for j in jobs] == [True, False]
 
 
-def test_plan_jobs_fixed_voice_by_default(tmp_path):
+def test_plan_jobs_no_voice_by_default(tmp_path):
+    """No --voice and no rotation -> None, so front matter / style decides."""
+    sdir = make_scripts(tmp_path, ["a.txt"])
+    jobs = batch.plan_jobs(sdir, tmp_path / "out")
+    assert jobs[0].voice is None
+
+
+def test_plan_jobs_explicit_voice(tmp_path):
     sdir = make_scripts(tmp_path, ["a.txt", "b.txt"])
     jobs = batch.plan_jobs(sdir, tmp_path / "out", voice="en-US-GuyNeural")
     assert {j.voice for j in jobs} == {"en-US-GuyNeural"}

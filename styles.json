@@ -1,0 +1,49 @@
+{
+  "default": {
+    "voice": "en-US-ChristopherNeural",
+    "rate": "+18%",
+    "font": "Impact",
+    "highlight": ["yellow", "lime"],
+    "highlight_chance": 0.22
+  },
+  "hype": {
+    "voice": "en-US-BrianNeural",
+    "rate": "+28%",
+    "font": "Impact",
+    "fontsize": 140,
+    "highlight": ["yellow", "red"],
+    "highlight_chance": 0.3
+  },
+  "deep": {
+    "voice": "en-US-ChristopherNeural",
+    "rate": "+10%",
+    "font": "Impact",
+    "outline": 10,
+    "highlight": ["orange"],
+    "highlight_chance": 0.15
+  },
+  "chill": {
+    "voice": "en-US-AndrewNeural",
+    "rate": "+12%",
+    "font": "Georgia",
+    "outline": 6,
+    "highlight": [],
+    "highlight_chance": 0
+  },
+  "uk": {
+    "voice": "en-GB-RyanNeural",
+    "rate": "+20%",
+    "font": "Impact",
+    "highlight": ["yellow", "cyan"],
+    "highlight_chance": 0.22
+  },
+  "storytime": {
+    "voice": "en-US-AvaNeural",
+    "rate": "+15%",
+    "font": "Georgia",
+    "fontsize": 120,
+    "outline": 7,
+    "highlight": ["pink", "cyan"],
+    "highlight_chance": 0.2
+  }
+}

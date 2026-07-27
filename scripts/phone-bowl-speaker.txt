@@ -1,0 +1,13 @@
+speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
+style: hype
+---
+A: Chat, why is nobody talking about the bowl trick?
+B: Because it sounds fake until you try it.
+A: A bowl. You are telling me a bowl beats a speaker.
+B: Put your phone in an empty bowl and play anything. The sound bounces off the curve and gets way louder.
+A: That cannot work.
+B: It is physics. The bowl focuses the sound waves instead of letting them scatter.
+A: So I have been carrying a speaker around for nothing.
+B: You have been carrying a kitchen away from greatness.
+A: Okay that is actually insane.
+B: Try it before this video ends and tell me I am wrong.

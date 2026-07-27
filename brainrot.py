@@ -8,6 +8,29 @@ Pipeline:
   4. ffmpeg center-crops a random slice of background gameplay to 1080x1920
      and burns captions + voiceover onto it
 
+Customization layers, weakest to strongest:
+  built-in defaults < styles.json preset < batch voice rotation
+  < front matter in the script file < explicit CLI flags
+
+Front matter: start a script with `key: value` lines and close with `---`:
+
+    voice: en-US-BrianNeural
+    rate: +25%
+    font: Georgia
+    style: hype
+    bg: minecraft
+    ---
+    The actual script text starts here.
+
+Dialogue mode: declare `speakers`, then write "name: line" dialogue. Each
+speaker gets their own voice and caption color, with a short pause between
+lines:
+
+    speakers: A=en-US-BrianNeural, B=en-US-JennyNeural
+    ---
+    A: Chat, why is nobody talking about this?
+    B: Because nobody wants to admit it works.
+
 Only stdlib is imported at module level so the gate tests run with zero deps
 installed; edge-tts and faster-whisper import lazily inside the functions
 that need them.
@@ -16,6 +39,7 @@ that need them.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import random
 import re
@@ -23,6 +47,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 
 # ---- knobs -----------------------------------------------------------------
@@ -40,6 +65,33 @@ MIN_WORD_DUR = 0.08
 POP_MS = 60                   # pop-in animation length in milliseconds
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 RATE_RE = re.compile(r"^[+-]\d+%$")
+STYLES_FILE = Path(__file__).resolve().parent / "styles.json"
+
+# ASS colors are &HBBGGRR& (blue-green-red, not RGB)
+COLORS = {
+    "white": "&HFFFFFF&",
+    "yellow": "&H00FFFF&",
+    "lime": "&H00FF00&",
+    "red": "&H0000FF&",
+    "cyan": "&HFFFF00&",
+    "pink": "&HFF00FF&",
+    "orange": "&H00A5FF&",
+}
+
+DEFAULTS = {
+    "voice": DEFAULT_VOICE,
+    "rate": DEFAULT_RATE,
+    "font": DEFAULT_FONT,
+    "fontsize": 130,
+    "outline": 9,
+    "margin_v": 760,
+    "highlight": ["yellow", "lime"],   # random accent words, [] = all white
+    "highlight_chance": 0.22,
+}
+STYLE_KEYS = set(DEFAULTS)
+FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers"}
+DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
+SPEAKER_PALETTE = ["white", "yellow", "cyan", "lime", "pink"]  # caption color per speaker
 
 
 def ffmpeg_bin() -> str:
@@ -50,14 +102,198 @@ def ffprobe_bin() -> str:
     return os.environ.get("FFPROBE_BIN", "ffprobe")
 
 
-# ---- pure helpers (gate-tested, no deps) -----------------------------------
+# ---- styles and script parsing (gate-tested, no deps) ----------------------
+
+def validate_style(name: str, s: dict) -> None:
+    unknown = set(s) - STYLE_KEYS
+    if unknown:
+        raise ValueError(f"style '{name}': unknown keys {sorted(unknown)}, "
+                         f"allowed: {sorted(STYLE_KEYS)}")
+    if "rate" in s and not RATE_RE.match(str(s["rate"])):
+        raise ValueError(f"style '{name}': rate must look like +18%, got {s['rate']!r}")
+    for k in ("fontsize", "outline", "margin_v"):
+        if k in s and (isinstance(s[k], bool) or not isinstance(s[k], int) or s[k] < 0):
+            raise ValueError(f"style '{name}': {k} must be a non-negative integer")
+    if "highlight" in s:
+        bad = [c for c in s["highlight"] if c not in COLORS]
+        if bad:
+            raise ValueError(f"style '{name}': unknown colors {bad}, "
+                             f"pick from {sorted(COLORS)}")
+    if "highlight_chance" in s and not 0 <= float(s["highlight_chance"]) <= 1:
+        raise ValueError(f"style '{name}': highlight_chance must be 0..1")
+
+
+def load_styles(path: Path | None = None) -> dict:
+    p = Path(path) if path else STYLES_FILE
+    styles = json.loads(p.read_text(encoding="utf-8"))
+    for name, s in styles.items():
+        validate_style(name, s)
+    if "default" not in styles:
+        raise ValueError(f"{p} must define a 'default' style")
+    return styles
+
+
+def _parse_speakers(value: str) -> dict[str, str]:
+    """'A=en-US-BrianNeural, B=en-US-JennyNeural' -> {'a': ..., 'b': ...}"""
+    speakers = {}
+    for pair in value.split(","):
+        if "=" not in pair:
+            raise ValueError(f"speakers entry {pair.strip()!r} must be name=voice")
+        name, voice = pair.split("=", 1)
+        speakers[name.strip().lower()] = voice.strip()
+    if len(speakers) < 2:
+        raise ValueError("dialogue needs at least 2 speakers (name=voice, name=voice)")
+    return speakers
+
+
+def _convert_front_value(key: str, value: str):
+    try:
+        if key in ("fontsize", "outline", "margin_v"):
+            return int(value)
+        if key == "highlight_chance":
+            return float(value)
+    except ValueError:
+        raise ValueError(f"front matter {key}: {value!r} is not a number") from None
+    if key == "highlight":
+        if value.lower() in ("none", "off", ""):
+            return []
+        return [c.strip().lower() for c in value.split(",")]
+    if key == "speakers":
+        return _parse_speakers(value)
+    return value
+
+
+def parse_script(path: Path) -> tuple[str, dict]:
+    """Script file -> (text to narrate, front matter overrides).
+
+    Front matter is optional: the file starts with `key: value` lines (first
+    key must be a known one, so prose like "Fun fact: ..." never triggers it)
+    and is closed by a line that is exactly `---`.
+    """
+    raw = Path(path).read_text(encoding="utf-8")
+    lines = raw.splitlines()
+    first = next((l.strip() for l in lines if l.strip()), "")
+    m = re.match(r"^(\w+)\s*:\s*(.*)$", first)
+    if not (m and m.group(1).lower() in FRONT_KEYS):
+        text = raw.strip()
+        if not text:
+            raise ValueError(f"script is empty: {path}")
+        return text, {}
+
+    meta, end = {}, None
+    for i, line in enumerate(lines):
+        t = line.strip()
+        if not t:
+            continue
+        if t == "---":
+            end = i
+            break
+        km = re.match(r"^(\w+)\s*:\s*(.*)$", t)
+        if not km:
+            raise ValueError(f"{path}: bad front matter line {t!r} "
+                             "(need 'key: value', close the block with ---)")
+        key = km.group(1).lower()
+        if key not in FRONT_KEYS:
+            raise ValueError(f"{path}: unknown front matter key '{key}', "
+                             f"allowed: {sorted(FRONT_KEYS)}")
+        meta[key] = _convert_front_value(key, km.group(2).strip())
+    if end is None:
+        raise ValueError(f"{path}: front matter never closed with a --- line")
+    text = "\n".join(lines[end + 1:]).strip()
+    if not text:
+        raise ValueError(f"script is empty after front matter: {path}")
+    return text, meta
+
 
 def load_script(path: Path) -> str:
-    text = Path(path).read_text(encoding="utf-8").strip()
-    if not text:
-        raise ValueError(f"script is empty: {path}")
-    return text
+    return parse_script(path)[0]
 
+
+def parse_dialogue(text: str, speakers: dict[str, str]) -> list[tuple[str, str]]:
+    """Dialogue body -> [(speaker, line)]. Every line starts with a declared
+    'name:' tag; a line that starts with an UNdeclared tag is an error (typo
+    protection); a plain line with no tag continues the previous line."""
+    lines: list[list[str]] = []
+    for raw in text.splitlines():
+        t = raw.strip()
+        if not t:
+            continue
+        m = re.match(r"^(\w+)\s*:\s*(.+)$", t)
+        if m:
+            name = m.group(1).lower()
+            if name not in speakers:
+                raise ValueError(
+                    f"line starts with unknown speaker '{m.group(1)}' "
+                    f"(declared: {', '.join(speakers)})")
+            lines.append([name, m.group(2).strip()])
+        elif lines:
+            lines[-1][1] += " " + t
+        else:
+            raise ValueError(f"dialogue must start with 'name: line', got {t!r}")
+    if len({name for name, _ in lines}) < 2:
+        raise ValueError("dialogue uses fewer than 2 of the declared speakers")
+    return [(name, line) for name, line in lines]
+
+
+def speaker_spans(durations: list[tuple[str, float]], gap: float = DIALOGUE_GAP,
+                  ) -> list[tuple[float, float, str]]:
+    """Per-line (speaker, seconds) -> [(start, end, speaker)] on the final
+    audio timeline. Each span absorbs the silence gap after its line; the last
+    span is open-ended so trailing whisper drift still maps to a speaker."""
+    spans, t = [], 0.0
+    for i, (name, dur) in enumerate(durations):
+        end = float("inf") if i == len(durations) - 1 else t + dur + gap
+        spans.append((t, end, name))
+        t += dur + gap
+    return spans
+
+
+def speaker_at(spans: list[tuple[float, float, str]], time: float) -> str:
+    for start, end, name in spans:
+        if time < end:
+            return name
+    return spans[-1][2]
+
+
+def speaker_color_tags(names: list[str]) -> dict[str, str]:
+    """Caption color per speaker, in declaration order. First speaker keeps
+    the plain white style; the rest get \\c overrides."""
+    tags = {}
+    for i, name in enumerate(names):
+        color = SPEAKER_PALETTE[i % len(SPEAKER_PALETTE)]
+        tags[name] = "" if color == "white" else "{\\c" + COLORS[color] + "}"
+    return tags
+
+
+def resolve_settings(
+    styles: dict,
+    cli: dict | None = None,
+    weak: dict | None = None,
+    front: dict | None = None,
+) -> tuple[dict, str | None, str]:
+    """Merge customization layers -> (settings, bg tag, style name).
+
+    Precedence, weakest first: DEFAULTS < style preset < weak (batch voice
+    rotation) < script front matter < explicit CLI flags.
+    """
+    cli, weak, front = dict(cli or {}), dict(weak or {}), dict(front or {})
+    style_name = cli.get("style") or front.get("style") or "default"
+    if style_name not in styles:
+        raise ValueError(f"unknown style '{style_name}', "
+                         f"available: {', '.join(sorted(styles))}")
+    bg_tag = cli.get("bg_tag") or front.get("bg")
+
+    settings = dict(DEFAULTS)
+    settings.update(styles[style_name])
+    for layer in (weak, front, cli):
+        for k, v in layer.items():
+            if k in STYLE_KEYS and v is not None:
+                settings[k] = v
+    validate_style("resolved settings", settings)
+    return settings, bg_tag, style_name
+
+
+# ---- caption building (gate-tested, no deps) -------------------------------
 
 def ass_time(t: float) -> str:
     """Seconds -> ASS timestamp H:MM:SS.cc (centiseconds)."""
@@ -103,18 +339,33 @@ def word_events(
     return events
 
 
+def highlight_tag(index: int, word: str, colors: list[str], chance: float) -> str:
+    """Deterministic per-word accent color. Same word at the same position
+    always gets the same color, so renders are reproducible."""
+    if not colors or chance <= 0:
+        return ""
+    h = zlib.crc32(f"{index}:{word}".encode("utf-8"))
+    if (h % 1000) / 1000 >= chance:
+        return ""
+    return "{\\c" + COLORS[colors[(h // 1000) % len(colors)]] + "}"
+
+
 def build_ass(
     words: list[tuple[str, float, float]],
-    font: str = DEFAULT_FONT,
-    fontsize: int = 130,
-    outline: int = 9,
-    margin_v: int = 760,
+    style: dict | None = None,
+    spans: list[tuple[float, float, str]] | None = None,
+    speaker_tags: dict[str, str] | None = None,
 ) -> str:
     """Word-by-word pop captions. One Dialogue event per word, centered,
-    bottom-anchored margin_v px up from the bottom of the 1080x1920 frame."""
-    style = (
-        f"Style: Pop,{font},{fontsize},&H00FFFFFF,&H00FFFFFF,&H00000000,"
-        f"&H00000000,-1,0,0,0,100,100,0,0,1,{outline},0,2,60,60,{margin_v},1"
+    bottom-anchored margin_v px up from the bottom of the 1080x1920 frame.
+
+    In dialogue mode (spans + speaker_tags given) each word is colored by
+    whoever is talking at that moment, replacing the random highlights."""
+    s = dict(DEFAULTS)
+    s.update(style or {})
+    style_line = (
+        f"Style: Pop,{s['font']},{s['fontsize']},&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        f"&H00000000,-1,0,0,0,100,100,0,0,1,{s['outline']},0,2,60,60,{s['margin_v']},1"
     )
     lines = [
         "[Script Info]",
@@ -129,22 +380,28 @@ def build_ass(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
         "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        style,
+        style_line,
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text",
     ]
     pop = f"{{\\fscx70\\fscy70\\t(0,{POP_MS},\\fscx100\\fscy100)}}"
-    for start, end, text in word_events(words):
+    for i, (start, end, text) in enumerate(word_events(words)):
         shown = sanitize_word(text)
         if not shown:
             continue
+        if spans and speaker_tags:
+            color = speaker_tags.get(speaker_at(spans, start), "")
+        else:
+            color = highlight_tag(i, shown, s["highlight"], s["highlight_chance"])
         lines.append(
-            f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Pop,,0,0,0,,{pop}{shown}"
+            f"Dialogue: 0,{ass_time(start)},{ass_time(end)},Pop,,0,0,0,,{pop}{color}{shown}"
         )
     return "\n".join(lines) + "\n"
 
+
+# ---- ffmpeg plumbing (gate-tested, no deps) --------------------------------
 
 def ffmpeg_filter_path(path: Path) -> str:
     """Path -> form the ffmpeg filtergraph parser accepts on any OS
@@ -164,19 +421,29 @@ def build_filter(ass_path: Path) -> str:
     )
 
 
-def list_backgrounds(bg: Path) -> list[Path]:
+def list_backgrounds(bg: Path, tag: str | None = None) -> list[Path]:
+    """All videos under bg (recursive). A tag narrows to the bg/<tag>/
+    subfolder, which is how `bg: minecraft` front matter picks its footage."""
     bg = Path(bg)
     if bg.is_file():
+        if tag:
+            raise ValueError(f"bg tag '{tag}' needs --bg to be a folder, "
+                             f"got a file: {bg}")
         return [bg]
-    if bg.is_dir():
-        vids = sorted(
-            p for p in bg.iterdir()
-            if p.is_file() and p.suffix.lower() in VIDEO_EXTS
-        )
-        if vids:
-            return vids
-        raise ValueError(f"no video files ({', '.join(sorted(VIDEO_EXTS))}) in {bg}")
-    raise ValueError(f"background not found: {bg}")
+    if not bg.is_dir():
+        raise ValueError(f"background not found: {bg}")
+    root = bg / tag if tag else bg
+    if not root.is_dir():
+        subs = sorted(p.name for p in bg.iterdir() if p.is_dir()) or ["(none)"]
+        raise ValueError(f"bg tag '{tag}': no folder {root} "
+                         f"(existing tags: {', '.join(subs)})")
+    vids = sorted(
+        p for p in root.rglob("*")
+        if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+    )
+    if not vids:
+        raise ValueError(f"no video files ({', '.join(sorted(VIDEO_EXTS))}) in {root}")
+    return vids
 
 
 def choose_clip(bg_dur: float, need: float, rng: random.Random) -> tuple[float, bool]:
@@ -185,6 +452,32 @@ def choose_clip(bg_dur: float, need: float, rng: random.Random) -> tuple[float, 
     if bg_dur > need:
         return rng.uniform(0.0, bg_dur - need), False
     return 0.0, True
+
+
+def installed_fonts() -> set[str] | None:
+    """Installed font display names on Windows, None elsewhere (no check)."""
+    if sys.platform != "win32":
+        return None
+    import winreg
+    names: set[str] = set()
+    key_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, key_path) as key:
+                for i in range(winreg.QueryInfoKey(key)[1]):
+                    names.add(winreg.EnumValue(key, i)[0])
+        except OSError:
+            pass
+    return names
+
+
+def warn_if_font_missing(font: str) -> None:
+    fonts = installed_fonts()
+    if fonts is None:
+        return
+    if not any(n.lower().startswith(font.lower()) for n in fonts):
+        print(f"warning: font '{font}' is not installed - "
+              "ffmpeg will silently substitute another font", flush=True)
 
 
 # ---- subprocess-backed pieces ----------------------------------------------
@@ -218,6 +511,44 @@ def synth_voiceover(text: str, voice: str, rate: str, mp3_path: Path) -> None:
     asyncio.run(_run())
 
 
+def synth_dialogue(
+    lines: list[tuple[str, str]],
+    speakers: dict[str, str],
+    rate: str,
+    workdir: Path,
+    out_wav: Path,
+) -> list[tuple[str, float]]:
+    """Synth each dialogue line with its speaker's voice, join them with a
+    short silence gap into one wav. Returns per-line (speaker, seconds) for
+    the caption color timeline."""
+    parts = []
+    for i, (name, line) in enumerate(lines):
+        p = workdir / f"part_{i:03d}.mp3"
+        synth_voiceover(line, speakers[name], rate, p)
+        parts.append((name, p, probe_duration(p)))
+
+    silence = workdir / "gap.mp3"
+    run_checked([
+        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+        "-t", f"{DIALOGUE_GAP}", "-c:a", "libmp3lame", "-ar", "24000",
+        "-b:a", "48k", str(silence),
+    ])
+    entries = []
+    for i, (_name, p, _dur) in enumerate(parts):
+        entries.append(f"file '{p.as_posix()}'")
+        if i < len(parts) - 1:
+            entries.append(f"file '{silence.as_posix()}'")
+    concat_list = workdir / "concat.txt"
+    concat_list.write_text("\n".join(entries) + "\n", encoding="utf-8")
+    run_checked([
+        ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-ar", "24000", "-ac", "1", str(out_wav),
+    ])
+    return [(name, dur) for name, _p, dur in parts]
+
+
 def transcribe_words(mp3_path: Path) -> list[tuple[str, float, float]]:
     from faster_whisper import WhisperModel
 
@@ -242,18 +573,22 @@ def render(
     script_path: Path,
     bg: Path,
     out: Path,
-    voice: str = DEFAULT_VOICE,
-    rate: str = DEFAULT_RATE,
-    font: str = DEFAULT_FONT,
+    *,
     seed: int | None = None,
     keep_temp: bool = False,
+    cli: dict | None = None,
+    weak: dict | None = None,
+    styles: dict | None = None,
 ) -> Path:
     if shutil.which(ffmpeg_bin()) is None and not Path(ffmpeg_bin()).is_file():
         raise RuntimeError(
             "ffmpeg not found. Install it (winget install Gyan.FFmpeg) or set FFMPEG_BIN."
         )
-    text = load_script(Path(script_path))
-    backgrounds = list_backgrounds(Path(bg))  # fail fast, before the slow TTS/whisper steps
+    styles = styles if styles is not None else load_styles()
+    text, front = parse_script(Path(script_path))
+    s, bg_tag, style_name = resolve_settings(styles, cli=cli, weak=weak, front=front)
+    backgrounds = list_backgrounds(Path(bg), tag=bg_tag)  # fail fast, before slow steps
+    warn_if_font_missing(s["font"])
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -266,15 +601,30 @@ def render(
         workdir = Path(cleanup.name)
 
     try:
-        mp3 = workdir / "voice.mp3"
-        synth_voiceover(text, voice, rate, mp3)
-        audio_dur = probe_duration(mp3)
-        print(f"[1/4] voiceover  {voice} {rate} -> {audio_dur:.1f}s", flush=True)
+        speakers = front.get("speakers")
+        if speakers:
+            dialogue = parse_dialogue(text, speakers)
+            voice_path = workdir / "voice.wav"
+            durations = synth_dialogue(dialogue, speakers, s["rate"], workdir, voice_path)
+            spans = speaker_spans(durations)
+            speaker_tags = speaker_color_tags(list(speakers))
+            audio_dur = probe_duration(voice_path)
+            print(f"[1/4] voiceover  dialogue {len(dialogue)} lines, "
+                  + ", ".join(f"{n}={v}" for n, v in speakers.items())
+                  + f" {s['rate']} -> {audio_dur:.1f}s", flush=True)
+        else:
+            spans = speaker_tags = None
+            voice_path = workdir / "voice.mp3"
+            synth_voiceover(text, s["voice"], s["rate"], voice_path)
+            audio_dur = probe_duration(voice_path)
+            print(f"[1/4] voiceover  {s['voice']} {s['rate']} (style {style_name}) "
+                  f"-> {audio_dur:.1f}s", flush=True)
 
-        words = transcribe_words(mp3)
+        words = transcribe_words(voice_path)
         ass_path = workdir / "captions.ass"
-        ass_path.write_text(build_ass(words, font=font), encoding="utf-8")
-        print(f"[2/4] captions   {len(words)} words (whisper {WHISPER_MODEL})", flush=True)
+        ass_path.write_text(build_ass(words, s, spans, speaker_tags), encoding="utf-8")
+        print(f"[2/4] captions   {len(words)} words, font {s['font']} "
+              f"(whisper {WHISPER_MODEL})", flush=True)
 
         rng = random.Random(seed)
         bg_file = rng.choice(backgrounds)
@@ -282,7 +632,8 @@ def render(
         need = audio_dur + TAIL_PAD
         offset, loop = choose_clip(bg_dur, need, rng)
         print(
-            f"[3/4] background {bg_file.name} @ {offset:.1f}s"
+            f"[3/4] background {bg_file.name}"
+            f"{f' [{bg_tag}]' if bg_tag else ''} @ {offset:.1f}s"
             f"{' (looped)' if loop else ''}",
             flush=True,
         )
@@ -292,7 +643,7 @@ def render(
             cmd += ["-stream_loop", "-1"]
         cmd += [
             "-ss", f"{offset:.3f}", "-i", str(bg_file),
-            "-i", str(mp3),
+            "-i", str(voice_path),
             "-t", f"{need:.3f}",
             "-vf", build_filter(ass_path),
             "-map", "0:v:0", "-map", "1:a:0",
@@ -312,31 +663,52 @@ def render(
             cleanup.cleanup()
 
 
+def print_styles(styles: dict) -> None:
+    print(f"{'style':<12} {'voice':<28} {'rate':<6} {'font':<10} highlights")
+    for name in sorted(styles):
+        s = dict(DEFAULTS)
+        s.update(styles[name])
+        hl = ",".join(s["highlight"]) if s["highlight"] else "none"
+        print(f"{name:<12} {s['voice']:<28} {s['rate']:<6} {s['font']:<10} "
+              f"{hl} @ {s['highlight_chance']:.0%}")
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if "--list-styles" in argv:
+        print_styles(load_styles())
+        return 0
+
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--script", required=True, type=Path, help="text file to narrate")
     ap.add_argument("--bg", required=True, type=Path,
                     help="background video file, or a folder of them")
     ap.add_argument("--out", required=True, type=Path, help="output .mp4 path")
-    ap.add_argument("--voice", default=DEFAULT_VOICE,
-                    help="edge-tts voice (edge-tts --list-voices)")
-    ap.add_argument("--rate", default=DEFAULT_RATE, help="speech speed, e.g. +18%%")
-    ap.add_argument("--font", default=DEFAULT_FONT, help="caption font name")
+    ap.add_argument("--style", default=None,
+                    help="preset from styles.json (--list-styles to see them)")
+    ap.add_argument("--voice", default=None,
+                    help="edge-tts voice (python voices.py to browse)")
+    ap.add_argument("--rate", default=None, help="speech speed, e.g. +18%%")
+    ap.add_argument("--font", default=None, help="caption font name")
+    ap.add_argument("--bg-tag", default=None,
+                    help="pick backgrounds from a subfolder, e.g. minecraft")
     ap.add_argument("--seed", type=int, default=None,
                     help="fix the random background/offset choice")
     ap.add_argument("--keep-temp", action="store_true",
                     help="keep the mp3 and .ass next to the output for inspection")
     args = ap.parse_args(argv)
 
-    if not RATE_RE.match(args.rate):
+    if args.rate is not None and not RATE_RE.match(args.rate):
         ap.error(f"--rate must look like +18%% or -5%%, got {args.rate}")
 
+    cli = {k: v for k, v in {
+        "style": args.style, "voice": args.voice, "rate": args.rate,
+        "font": args.font, "bg_tag": args.bg_tag,
+    }.items() if v is not None}
+
     try:
-        render(
-            args.script, args.bg, args.out,
-            voice=args.voice, rate=args.rate, font=args.font,
-            seed=args.seed, keep_temp=args.keep_temp,
-        )
+        render(args.script, args.bg, args.out, seed=args.seed,
+               keep_temp=args.keep_temp, cli=cli)
     except (ValueError, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
