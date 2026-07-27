@@ -5,3 +5,4 @@ out/
 backgrounds/*
 !backgrounds/README.txt
 *_temp/
+weppy-project-sync/
