@@ -17,6 +17,7 @@ carry the usual reuse exposure. The license is printed per video.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -33,8 +34,12 @@ YT_RE = re.compile(
     re.I)
 PLAYLIST_RE = re.compile(r"youtube\.com/playlist\?", re.I)
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
-# best video-only stream up to 1080p (audio gets replaced anyway), mp4 remux
-FORMAT = "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]"
+# best video-only stream up to 1080p-equivalent in EITHER orientation
+# (a vertical "1080p" is 1080x1920, so its height is 1920 - capping height
+# alone rejects every vertical format). Audio gets replaced anyway.
+FORMAT = ("bestvideo[height<=1080][ext=mp4]/bestvideo[width<=1080][ext=mp4]/"
+          "bestvideo[height<=1080]/bestvideo[width<=1080]/"
+          "best[height<=1080]/best[width<=1080]/best")
 MAX_MINUTES = 45   # playlist entries longer than this get skipped
 # Netscape-format cookie export (gitignored, NEVER commit: session tokens).
 # Chrome's app-bound encryption blocks --cookies-from-browser on Windows, so
@@ -43,18 +48,42 @@ COOKIES_FILE = ROOT / "cookies.txt"
 
 
 def ytdlp_bin() -> str:
-    """PATH first, then the winget install (a terminal opened before
-    `winget install yt-dlp.yt-dlp` has a stale PATH, same as ffmpeg)."""
+    """Venv's yt-dlp first (pip `yt-dlp[default]` bundles the EJS challenge
+    solver scripts the standalone exe lacks), then PATH, then winget."""
+    venv_exe = Path(sys.executable).with_name("yt-dlp.exe")
+    if venv_exe.is_file():
+        return str(venv_exe)
     found = shutil.which("yt-dlp")
     if found:
         return found
-    import os
     base = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet"
     for candidate in [base / "Links" / "yt-dlp.exe",
                       *sorted(base.glob("Packages/yt-dlp*/yt-dlp.exe"))]:
         if candidate.is_file():
             return str(candidate)
     return "yt-dlp"
+
+
+def runtime_env() -> dict:
+    """yt-dlp needs a JS runtime on PATH to solve YouTube's n-challenge
+    (deno recommended; without one you get storyboards only). Prepend deno
+    and node locations so the subprocess always finds them."""
+    env = os.environ.copy()
+    extra = []
+    deno = shutil.which("deno")
+    if deno:
+        extra.append(str(Path(deno).parent))
+    else:
+        base = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Packages"
+        hits = sorted(base.glob("DenoLand.Deno*/deno.exe")) if base.exists() else []
+        if hits:
+            extra.append(str(hits[-1].parent))
+    node_dir = Path(r"C:\Program Files\nodejs")
+    if node_dir.is_dir():
+        extra.append(str(node_dir))
+    if extra:
+        env["PATH"] = os.pathsep.join(extra) + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
@@ -87,7 +116,8 @@ def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
 def _run_ytdlp(cmd: list[str]) -> subprocess.CompletedProcess:
     try:
         return subprocess.run(cmd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=1800)
+                              encoding="utf-8", errors="replace", timeout=1800,
+                              env=runtime_env())
     except FileNotFoundError:
         raise RuntimeError(
             "yt-dlp not found - winget install yt-dlp.yt-dlp, or reopen the "

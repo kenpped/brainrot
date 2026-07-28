@@ -24,6 +24,27 @@ def test_youtube_url_regex():
         assert not get_bg.YT_RE.match(u), u
 
 
+def test_ytdlp_prefers_venv_binary(tmp_path, monkeypatch):
+    """pip yt-dlp[default] bundles the EJS solver the standalone exe lacks."""
+    fake_python = tmp_path / "Scripts" / "python.exe"
+    fake_python.parent.mkdir(parents=True)
+    fake_python.write_bytes(b"x")
+    (tmp_path / "Scripts" / "yt-dlp.exe").write_bytes(b"x")
+    monkeypatch.setattr(get_bg.sys, "executable", str(fake_python))
+    assert get_bg.ytdlp_bin() == str(tmp_path / "Scripts" / "yt-dlp.exe")
+
+
+def test_runtime_env_prepends_js_runtime(tmp_path, monkeypatch):
+    """No JS runtime on PATH = storyboards only; deno dir must be prepended."""
+    deno = tmp_path / "Microsoft" / "WinGet" / "Packages" / "DenoLand.Deno_x" / "deno.exe"
+    deno.parent.mkdir(parents=True)
+    deno.write_bytes(b"x")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(get_bg.shutil, "which", lambda _: None)
+    env = get_bg.runtime_env()
+    assert env["PATH"].startswith(str(deno.parent))
+
+
 def test_playlist_mode_flags(tmp_path):
     single = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
     assert "--no-playlist" in single and "--playlist-items" not in single
@@ -35,9 +56,11 @@ def test_playlist_mode_flags(tmp_path):
     assert pl[pl.index("--match-filters") + 1] == f"duration<{get_bg.MAX_MINUTES * 60}"
 
 
-def test_format_caps_at_1080():
-    assert "height<=1080" in get_bg.FORMAT
+def test_format_caps_at_1080_both_orientations():
+    assert "height<=1080" in get_bg.FORMAT          # landscape cap
+    assert "width<=1080" in get_bg.FORMAT           # vertical: 1080x1920 has height 1920
     assert "bestvideo" in get_bg.FORMAT
+    assert get_bg.FORMAT.endswith("/best")          # never zero-format again
 
 
 def test_build_download_cmd(tmp_path):
