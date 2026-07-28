@@ -2,8 +2,10 @@
 # Prereq (one time): gh auth login
 # Then: powershell -ExecutionPolicy Bypass -File publish.ps1
 # Safe to rerun; every step skips itself if already done.
+# Works in both Windows PowerShell 5.1 and pwsh 7 (5.1 gotchas: BOM-writing
+# Set-Content and stderr-as-error on native commands are both avoided).
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 
 $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
@@ -13,28 +15,34 @@ if (-not (Test-Path $gh)) {
     exit 1
 }
 
-& $gh auth status 2>$null | Out-Null
+& $gh auth status *> $null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: not logged in. Run:  gh auth login   (pick GitHub.com, browser login), then rerun this."
     exit 1
 }
-$user = (& $gh api user --jq .login).Trim()
+$user = (& $gh api user --jq .login | Out-String).Trim()
 Write-Host "logged in as $user"
 
-# 1. bake the username into the landing page (idempotent)
-$idx = "docs\index.html"
-$html = Get-Content $idx -Raw
+# 1. bake the username into the landing page (idempotent, BOM-free)
+$idx = Join-Path $PSScriptRoot "docs\index.html"
+$html = [System.IO.File]::ReadAllText($idx, [System.Text.UTF8Encoding]::new($false))
 if ($html -match "\{\{GITHUB_USER\}\}") {
-    $html -replace "\{\{GITHUB_USER\}\}", $user | Set-Content $idx -NoNewline -Encoding utf8
-    git add $idx
+    $html = $html -replace "\{\{GITHUB_USER\}\}", $user
+    [System.IO.File]::WriteAllText($idx, $html, [System.Text.UTF8Encoding]::new($false))
+    git add "docs/index.html"
     git -c user.name="Ken" -c user.email="sirkentavius@gmail.com" commit -m "fill github username into landing page"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: commit failed (pre-commit tests?). Fix and rerun."
+        exit 1
+    }
     Write-Host "landing page personalized for $user"
 }
 
-# 2. create the public repo and push (or just push if it exists)
-git remote get-url origin 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
+# 2. create the public repo and push (or just push if origin exists)
+$hasOrigin = (git remote) -contains "origin"
+if (-not $hasOrigin) {
     & $gh repo create brainrot --public --source . --push
+    if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: repo create failed"; exit 1 }
     Write-Host "repo created: https://github.com/$user/brainrot"
 } else {
     git push -u origin master
@@ -42,7 +50,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 3. demo videos as release assets (binaries stay out of git history)
-& $gh release view v0.1 -R "$user/brainrot" 2>$null | Out-Null
+& $gh release view v0.1 -R "$user/brainrot" *> $null
 if ($LASTEXITCODE -ne 0) {
     $demos = @("out\robot-demon.mp4", "out\dopamine-subway.mp4", "out\battery-winter.mp4") | Where-Object { Test-Path $_ }
     & $gh release create v0.1 @demos -R "$user/brainrot" --title "demo videos" --notes "Demo renders embedded on the landing page."
@@ -52,9 +60,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # 4. turn on GitHub Pages from master:/docs (free hosting)
-& $gh api "repos/$user/brainrot/pages" -X POST -f "source[branch]=master" -f "source[path]=/docs" 2>$null | Out-Null
+& $gh api "repos/$user/brainrot/pages" -X POST -f "source[branch]=master" -f "source[path]=/docs" *> $null
 if ($LASTEXITCODE -ne 0) {
-    & $gh api "repos/$user/brainrot/pages" -X PUT -f "source[branch]=master" -f "source[path]=/docs" 2>$null | Out-Null
+    & $gh api "repos/$user/brainrot/pages" -X PUT -f "source[branch]=master" -f "source[path]=/docs" *> $null
 }
 
 Write-Host ""
