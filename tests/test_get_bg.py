@@ -1,0 +1,103 @@
+"""Gate tests for get_bg.py -- no network, no yt-dlp runs."""
+
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import get_bg
+
+
+def test_youtube_url_regex():
+    ok = ["https://www.youtube.com/watch?v=abc123",
+          "https://youtu.be/abc123",
+          "https://m.youtube.com/watch?v=abc123",
+          "https://www.youtube.com/shorts/abc123"]
+    for u in ok:
+        assert get_bg.YT_RE.match(u), u
+    bad = ["https://vimeo.com/123", "https://example.com/watch?v=1",
+           "notaurl", "https://youtube.evil.com/watch?v=1"]
+    for u in bad:
+        assert not get_bg.YT_RE.match(u), u
+
+
+def test_format_caps_at_1080():
+    assert "height<=1080" in get_bg.FORMAT
+    assert "bestvideo" in get_bg.FORMAT
+
+
+def test_build_download_cmd(tmp_path):
+    cmd = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
+    assert cmd[cmd.index("-f") + 1] == get_bg.FORMAT
+    assert "--no-playlist" in cmd            # a playlist link must not fan out
+    assert "--restrict-filenames" in cmd     # ffmpeg-safe names
+    assert "--remux-video" in cmd
+    assert cmd[-1] == "https://youtu.be/x"
+    out = cmd[cmd.index("-o") + 1]
+    assert str(tmp_path) in out and "%(id)s" in out
+
+
+def test_fetch_parses_filepath_and_license(tmp_path, monkeypatch):
+    clip = tmp_path / "minecraft" / "Cool_Video [abc].mp4"
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = f"Cool Video | license: Creative Commons Attribution\n{clip}\n"
+
+    def fake_run(cmd, **kwargs):
+        clip.parent.mkdir(parents=True, exist_ok=True)
+        clip.write_bytes(b"video")
+        return FakeProc()
+
+    monkeypatch.setattr(get_bg.subprocess, "run", fake_run)
+    got = get_bg.fetch("https://youtu.be/abc", "minecraft", tmp_path)
+    assert got == clip
+
+
+def test_fetch_raises_with_yt_dlp_error(tmp_path, monkeypatch):
+    class FakeProc:
+        returncode = 1
+        stderr = "ERROR: Video unavailable"
+        stdout = ""
+
+    monkeypatch.setattr(get_bg.subprocess, "run", lambda *a, **k: FakeProc())
+    with pytest.raises(RuntimeError, match="Video unavailable"):
+        get_bg.fetch("https://youtu.be/abc", "minecraft", tmp_path)
+
+
+def test_fetch_retries_bot_check_with_tv_client(tmp_path, monkeypatch):
+    """YouTube's 'Sign in to confirm' challenge -> automatic tv-client retry."""
+    clip = tmp_path / "gta" / "V [x].mp4"
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+
+        class P:
+            pass
+        p = P()
+        if len(calls) == 1:
+            p.returncode, p.stderr, p.stdout = 1, "Sign in to confirm you're not a bot", ""
+        else:
+            clip.parent.mkdir(parents=True, exist_ok=True)
+            clip.write_bytes(b"v")
+            p.returncode, p.stderr = 0, ""
+            p.stdout = f"V | license: Standard YouTube License\n{clip}\n"
+        return p
+
+    monkeypatch.setattr(get_bg.subprocess, "run", fake_run)
+    assert get_bg.fetch("https://youtu.be/x", "gta", tmp_path) == clip
+    assert len(calls) == 2
+    assert "youtube:player_client=tv" in calls[1]
+    assert not any("player_client" in c for c in calls[0])
+
+
+def test_cookies_flag_is_optin_passthrough(tmp_path):
+    plain = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
+    assert "--cookies-from-browser" not in plain      # never on by default
+    with_cookies = get_bg.build_download_cmd(
+        "https://youtu.be/x", tmp_path, cookies_browser="edge")
+    assert with_cookies[with_cookies.index("--cookies-from-browser") + 1] == "edge"

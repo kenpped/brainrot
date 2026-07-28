@@ -129,6 +129,10 @@ def build_render_cmd(script_path: Path, out_path: Path, opts: dict) -> list[str]
     return cmd
 
 
+def build_fetch_cmd(url: str, tag: str) -> list[str]:
+    return [sys.executable, str(ROOT / "get_bg.py"), url, "--tag", tag]
+
+
 def build_write_cmd(topic: str, dialogue: bool, style: str | None,
                     bg: str | None, cast: list[str] | None = None) -> list[str]:
     cmd = [sys.executable, str(ROOT / "write_script.py"), topic]
@@ -318,6 +322,26 @@ def api_upload():
     return jsonify({"tag": tag, "name": dest.name,
                     "minutes": round(minutes, 1),
                     "warn": br.upscale_note(width, height)})
+
+
+@app.post("/api/fetch_bg")
+def api_fetch_bg():
+    """Queue a YouTube download straight into backgrounds/<tag>/ (get_bg.py
+    does the pulling and grades the file on arrival)."""
+    from get_bg import YT_RE
+    data = request.get_json(force=True, silent=True) or {}
+    url = (data.get("url") or "").strip()
+    tag = (data.get("tag") or "").strip().lower()
+    if not YT_RE.match(url):
+        return jsonify({"error": "that is not a YouTube video link"}), 400
+    if not TAG_RE.match(tag):
+        return jsonify({"error": "folder name must be lowercase letters, "
+                                 "numbers, dashes (e.g. minecraft)"}), 400
+    job = Job(id=uuid.uuid4().hex[:10], kind="fetch",
+              name=f"youtube -> {tag}: {url[:60]}")
+    JOBS[job.id] = job
+    QUEUE.put((job, build_fetch_cmd(url, tag), None))
+    return jsonify({"id": job.id}), 202
 
 
 @app.post("/api/open")

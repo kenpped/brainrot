@@ -238,6 +238,29 @@ def test_open_endpoint_returns_path(client, monkeypatch):
     assert "explorer.exe" in seen["cmd"][0] or seen["cmd"][0] in ("open", "xdg-open")
 
 
+# ---- youtube fetch ---------------------------------------------------------
+
+def test_fetch_bg_validates_and_enqueues(client):
+    bad_url = client.post("/api/fetch_bg", json={"url": "https://vimeo.com/1",
+                                                 "tag": "minecraft"})
+    assert bad_url.status_code == 400
+    bad_tag = client.post("/api/fetch_bg", json={
+        "url": "https://youtu.be/abc", "tag": "My Clips!"})
+    assert bad_tag.status_code == 400
+    ok = client.post("/api/fetch_bg", json={
+        "url": "https://youtu.be/abc", "tag": "minecraft"})
+    assert ok.status_code == 202
+    job = webapp.JOBS[ok.get_json()["id"]]
+    assert job.kind == "fetch" and webapp.QUEUE.qsize() == 1
+
+
+def test_build_fetch_cmd():
+    cmd = webapp.build_fetch_cmd("https://youtu.be/x", "gta")
+    assert cmd[0] == sys.executable and cmd[1].endswith("get_bg.py")
+    assert cmd[2] == "https://youtu.be/x"
+    assert cmd[cmd.index("--tag") + 1] == "gta"
+
+
 # ---- LAN token gate --------------------------------------------------------
 
 def test_lan_gate_blocks_without_token(client):

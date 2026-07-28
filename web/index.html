@@ -131,6 +131,10 @@ dialogue mode:
       <button id="upBtn">upload clip</button>
       <button id="openBtn">open folder on PC</button>
     </div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="ytUrl" placeholder="or paste a YouTube link (1080p pulled automatically)">
+      <button id="ytBtn">add from link</button>
+    </div>
     <div class="status" id="upStatus"></div>
   </section>
 
@@ -268,6 +272,21 @@ async function uploadClip() {
   $("upBtn").disabled = false;
 }
 
+async function fetchFromYouTube() {
+  const st = $("upStatus");
+  const url = $("ytUrl").value.trim();
+  const tag = $("upTag").value.trim().toLowerCase();
+  if (!url) { st.className = "status err"; st.textContent = "paste a YouTube link first"; return; }
+  if (!tag) { st.className = "status err"; st.textContent = "type a folder name above, e.g. minecraft"; return; }
+  try {
+    await jfetch("/api/fetch_bg", { url, tag });
+    st.className = "status";
+    st.textContent = "downloading in the jobs panel - the folder updates when it lands";
+    $("ytUrl").value = "";
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  refresh();
+}
+
 async function openFolder() {
   const st = $("upStatus");
   const data = await jfetch("/api/open", {});
@@ -286,6 +305,7 @@ async function refresh() {
       <span class="last">${j.state === "failed" ? j.error : j.last}</span>
     </div>`).join("");
   const active = jobs.some(j => j.state === "queued" || j.state === "running");
+  if (!active && hadActive) loadConfig();   // new bg folders appear after fetch jobs
   if (!active && hadActive || !$("gallery").childElementCount) {
     const vids = await jfetch("/api/videos");
     $("gallery").innerHTML = vids.length ? vids.map(v => `
@@ -310,6 +330,7 @@ $("castA").addEventListener("change", castVibe);
 $("castB").addEventListener("change", castVibe);
 $("upBtn").onclick = uploadClip;
 $("openBtn").onclick = openFolder;
+$("ytBtn").onclick = fetchFromYouTube;
 loadConfig().then(() => { previewFont(); refresh(); });
 setInterval(refresh, 2000);
 </script>
