@@ -128,9 +128,43 @@ def test_fetch_retries_bot_check_with_tv_client(tmp_path, monkeypatch):
     assert not any("player_client" in c for c in calls[0])
 
 
-def test_cookies_flag_is_optin_passthrough(tmp_path):
+def test_cookies_env_default_is_machine_local(monkeypatch, capsys):
+    """BRAINROT_YT_COOKIES makes cookies the default on THIS machine only;
+    without it the flag stays off (public repo default)."""
+    monkeypatch.setenv("BRAINROT_YT_COOKIES", "chrome")
+    seen = {}
+
+    def fake_fetch(url, tag, bg, cookies_browser=None, max_items=10):
+        seen["cookies"] = cookies_browser
+        return []
+
+    monkeypatch.setattr(get_bg, "fetch", fake_fetch)
+    get_bg.main(["https://youtu.be/x", "--tag", "gta"])
+    assert seen["cookies"] == "chrome"
+
+
+def test_cookies_flag_is_optin_passthrough(tmp_path, monkeypatch):
+    monkeypatch.setattr(get_bg, "COOKIES_FILE", tmp_path / "absent.txt")
     plain = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
     assert "--cookies-from-browser" not in plain      # never on by default
     with_cookies = get_bg.build_download_cmd(
         "https://youtu.be/x", tmp_path, cookies_browser="edge")
     assert with_cookies[with_cookies.index("--cookies-from-browser") + 1] == "edge"
+
+
+def test_cookies_file_beats_browser(tmp_path, monkeypatch):
+    """The in-browser export works where DPAPI decryption cannot."""
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    monkeypatch.setattr(get_bg, "COOKIES_FILE", jar)
+    cmd = get_bg.build_download_cmd("https://youtu.be/x", tmp_path,
+                                    cookies_browser="chrome")
+    assert cmd[cmd.index("--cookies") + 1] == str(jar)
+    assert "--cookies-from-browser" not in cmd
+
+
+def test_cookies_file_is_gitignored():
+    """The repo is PUBLIC; the session-token file must never be committable."""
+    gitignore = (Path(__file__).resolve().parents[1] / ".gitignore") \
+        .read_text(encoding="utf-8")
+    assert "cookies.txt" in gitignore.splitlines()

@@ -36,6 +36,10 @@ TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 # best video-only stream up to 1080p (audio gets replaced anyway), mp4 remux
 FORMAT = "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]"
 MAX_MINUTES = 45   # playlist entries longer than this get skipped
+# Netscape-format cookie export (gitignored, NEVER commit: session tokens).
+# Chrome's app-bound encryption blocks --cookies-from-browser on Windows, so
+# an in-browser export ("Get cookies.txt LOCALLY" extension) is the reliable key.
+COOKIES_FILE = ROOT / "cookies.txt"
 
 
 def ytdlp_bin() -> str:
@@ -56,6 +60,8 @@ def ytdlp_bin() -> str:
 def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
                        cookies_browser: str | None = None,
                        max_items: int = 10) -> list[str]:
+    """cookies.txt (if present) beats --cookies-from-browser: the export
+    from inside the browser works where DPAPI decryption cannot."""
     cmd = [
         ytdlp_bin(), "-f", FORMAT, "--remux-video", "mp4",
         "--restrict-filenames",
@@ -71,7 +77,9 @@ def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
         cmd += ["--no-playlist"]
     if client:
         cmd += ["--extractor-args", f"youtube:player_client={client}"]
-    if cookies_browser:
+    if COOKIES_FILE.is_file():
+        cmd += ["--cookies", str(COOKIES_FILE)]
+    elif cookies_browser:
         cmd += ["--cookies-from-browser", cookies_browser]
     return cmd + [url]
 
@@ -128,10 +136,15 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--tag", required=True,
                     help="backgrounds/ subfolder to drop them in, e.g. minecraft")
     ap.add_argument("--bg", type=Path, default=ROOT / "backgrounds")
-    ap.add_argument("--cookies-from-browser", default=None, metavar="BROWSER",
+    import os
+    ap.add_argument("--cookies-from-browser",
+                    default=os.environ.get("BRAINROT_YT_COOKIES") or None,
+                    metavar="BROWSER",
                     help="OPT-IN: pass your browser's YouTube session to "
                          "yt-dlp (e.g. chrome, edge) if the bot check blocks "
-                         "both clients; ties downloads to your account")
+                         "both clients; ties downloads to your account. "
+                         "Set BRAINROT_YT_COOKIES to make it this machine's "
+                         "default (the repo default stays off).")
     ap.add_argument("--max", type=int, default=10, dest="max_items",
                     help="cap per playlist link (disk + OneDrive sync sanity)")
     args = ap.parse_args(argv)
