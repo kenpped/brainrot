@@ -261,6 +261,27 @@ def test_build_fetch_cmd():
     assert cmd[cmd.index("--tag") + 1] == "gta"
 
 
+def test_studio_buttons_build_right_commands():
+    assert webapp.build_random_cmd()[-1] == "--random"
+    reddit = webapp.build_reddit_cmd(2, "roblox")
+    assert reddit[1].endswith("reddit_stories.py")
+    assert reddit[reddit.index("--count") + 1] == "2"
+    assert reddit[reddit.index("--bg-tag") + 1] == "roblox"
+    ideas_cmd = webapp.build_ideas_cmd("money traps")
+    assert ideas_cmd[1].endswith("ideas.py") and "--json" in ideas_cmd
+    assert ideas_cmd[ideas_cmd.index("--theme") + 1] == "money traps"
+
+
+def test_studio_button_routes_enqueue(client):
+    for route, body in (("/api/fetch_random", {}),
+                        ("/api/reddit", {"count": 1}),
+                        ("/api/ideas", {"theme": "history"})):
+        res = client.post(route, json=body)
+        assert res.status_code == 202, route
+    assert webapp.QUEUE.qsize() == 3
+    assert client.post("/api/reddit", json={"bg_tag": "Bad Tag!"}).status_code == 400
+
+
 # ---- LAN token gate --------------------------------------------------------
 
 def test_lan_gate_blocks_without_token(client):

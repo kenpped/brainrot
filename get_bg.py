@@ -45,6 +45,11 @@ MAX_MINUTES = 45   # playlist entries longer than this get skipped
 # Chrome's app-bound encryption blocks --cookies-from-browser on Windows, so
 # an in-browser export ("Get cookies.txt LOCALLY" extension) is the reliable key.
 COOKIES_FILE = ROOT / "cookies.txt"
+# where "random clip" pulls from: known no-copyright vertical gameplay
+BG_SOURCES = [
+    "https://youtube.com/playlist?list=PLlyn0LTB-nHBO6y-9DD3LqF9FhndmLbg2",
+]
+GAME_TAGS = ["subway", "roblox", "minecraft", "gta", "forza"]
 
 
 def ytdlp_bin() -> str:
@@ -139,6 +144,13 @@ def fetch(url: str, tag: str, bg_dir: Path,
         proc = _run_ytdlp(build_download_cmd(url, dest_dir, client="tv",
                                              max_items=max_items,
                                              cookies_browser=cookies_browser))
+    if proc.returncode != 0 and "confirm you" in proc.stderr \
+            and COOKIES_FILE.is_file():
+        raise RuntimeError(
+            "YouTube bot check even with cookies.txt - the export has gone "
+            "stale (YouTube rotates session tokens while you browse). "
+            "Re-export with the 'Get cookies.txt LOCALLY' extension to the "
+            "same path and retry; takes 30 seconds.")
     lines = [l for l in proc.stdout.strip().splitlines() if l.strip()]
     paths = [Path(l) for l in lines
              if l.lower().endswith((".mp4", ".mkv", ".webm"))]
@@ -152,6 +164,71 @@ def fetch(url: str, tag: str, bg_dir: Path,
     return paths
 
 
+def auto_tag(title: str) -> str:
+    """Folder from the clip's title, so random pulls sort themselves."""
+    low = title.lower()
+    for tag in GAME_TAGS:
+        if tag in low:
+            return tag
+    return "vertical"
+
+
+def existing_ids(bg_dir: Path) -> set[str]:
+    """Video ids already in the library (filenames carry [id])."""
+    ids = set()
+    for p in bg_dir.rglob("*.mp4"):
+        m = re.search(r"\[([A-Za-z0-9_-]{6,})\]", p.name)
+        if m:
+            ids.add(m.group(1))
+    return ids
+
+
+def pick_random_entry(entries: list[dict], skip_ids: set[str], rng) -> dict | None:
+    fresh = [e for e in entries if e["id"] not in skip_ids]
+    return rng.choice(fresh) if fresh else None
+
+
+def probe_playlist(url: str) -> list[dict]:
+    """Flat listing: [{id, title, seconds}] without downloading anything."""
+    proc = _run_ytdlp([
+        ytdlp_bin(), "--flat-playlist",
+        "--print", "%(id)s\t%(title)s\t%(duration)s", url,
+    ] + (["--cookies", str(COOKIES_FILE)] if COOKIES_FILE.is_file() else []))
+    if proc.returncode != 0:
+        detail = proc.stderr.strip().splitlines()[-1:] or ["unknown error"]
+        raise RuntimeError(f"playlist probe failed: {detail[0]}")
+    entries = []
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        vid, title, dur = parts
+        try:
+            seconds = float(dur)
+        except ValueError:
+            seconds = 0.0
+        if seconds and seconds > MAX_MINUTES * 60:
+            continue
+        entries.append({"id": vid, "title": title, "seconds": seconds})
+    return entries
+
+
+def fetch_random(bg_dir: Path, rng=None) -> Path:
+    """One surprise clip from BG_SOURCES: never a repeat of what's already
+    in the library, auto-tagged into the right game folder."""
+    import random as _random
+    rng = rng or _random
+    source = rng.choice(BG_SOURCES)
+    entry = pick_random_entry(probe_playlist(source), existing_ids(bg_dir), rng)
+    if entry is None:
+        raise RuntimeError("every clip in the source playlists is already "
+                           "in your library")
+    tag = auto_tag(entry["title"])
+    print(f"random pick: {entry['title'][:70]} -> {tag}/", flush=True)
+    paths = fetch(f"https://www.youtube.com/watch?v={entry['id']}", tag, bg_dir)
+    return paths[0]
+
+
 def grade(path: Path) -> str:
     width, height = br.probe_size(path)
     minutes = br.probe_duration(path) / 60
@@ -162,8 +239,11 @@ def grade(path: Path) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("urls", nargs="+", help="YouTube video links")
-    ap.add_argument("--tag", required=True,
+    ap.add_argument("urls", nargs="*", help="YouTube video links")
+    ap.add_argument("--random", action="store_true",
+                    help="pull one surprise clip from the known no-copyright "
+                         "playlists, auto-tagged, never a library repeat")
+    ap.add_argument("--tag", default=None,
                     help="backgrounds/ subfolder to drop them in, e.g. minecraft")
     ap.add_argument("--bg", type=Path, default=ROOT / "backgrounds")
     import os
@@ -179,7 +259,18 @@ def main(argv: list[str] | None = None) -> int:
                     help="cap per playlist link (disk + OneDrive sync sanity)")
     args = ap.parse_args(argv)
 
-    if not TAG_RE.match(args.tag):
+    if args.random:
+        try:
+            path = fetch_random(args.bg)
+            print(f"  {path.name}: {grade(path)}", flush=True)
+            print("done: 1 downloaded, 0 failed", flush=True)
+            return 0
+        except (RuntimeError, ValueError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+    if not args.urls:
+        ap.error("give YouTube links, or use --random")
+    if not args.tag or not TAG_RE.match(args.tag):
         ap.error("tag must be lowercase letters/numbers/dashes, e.g. minecraft")
     bad = [u for u in args.urls if not YT_RE.match(u)]
     if bad:

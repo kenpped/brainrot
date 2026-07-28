@@ -157,6 +157,43 @@ def test_fetch_retries_bot_check_with_tv_client(tmp_path, monkeypatch):
     assert not any("player_client" in c for c in calls[0])
 
 
+def test_auto_tag_sorts_by_game():
+    assert get_bg.auto_tag("Subway Surfers Gameplay No Copyright") == "subway"
+    assert get_bg.auto_tag("ROBLOX Parkour (Vertical)") == "roblox"
+    assert get_bg.auto_tag("GTA 5 Mega Ramp") == "gta"
+    assert get_bg.auto_tag("Satisfying slime video") == "vertical"
+
+
+def test_existing_ids_reads_bracketed_filenames(tmp_path):
+    (tmp_path / "roblox").mkdir()
+    (tmp_path / "roblox" / "Cool_Clip [abc123XY].mp4").write_bytes(b"x")
+    (tmp_path / "loose_no_id.mp4").write_bytes(b"x")
+    assert get_bg.existing_ids(tmp_path) == {"abc123XY"}
+
+
+def test_pick_random_entry_never_repeats_library():
+    import random
+    entries = [{"id": "aaa111"}, {"id": "bbb222"}]
+    pick = get_bg.pick_random_entry(entries, {"aaa111"}, random.Random(1))
+    assert pick["id"] == "bbb222"
+    assert get_bg.pick_random_entry(entries, {"aaa111", "bbb222"},
+                                    random.Random(1)) is None
+
+
+def test_probe_playlist_parses_and_filters_long(monkeypatch):
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = ("vid1\tSubway fun\t840\n"
+                  "vid2\tMarathon stream\t5400\n"     # > 45 min, dropped
+                  "malformed line without tabs\n"
+                  "vid3\tRoblox run\tNA\n")
+
+    monkeypatch.setattr(get_bg, "_run_ytdlp", lambda cmd: FakeProc())
+    entries = get_bg.probe_playlist("https://youtube.com/playlist?list=x")
+    assert [e["id"] for e in entries] == ["vid1", "vid3"]
+
+
 def test_cookies_env_default_is_machine_local(monkeypatch, capsys):
     """BRAINROT_YT_COOKIES makes cookies the default on THIS machine only;
     without it the flag stays off (public repo default)."""
@@ -190,6 +227,23 @@ def test_cookies_file_beats_browser(tmp_path, monkeypatch):
                                     cookies_browser="chrome")
     assert cmd[cmd.index("--cookies") + 1] == str(jar)
     assert "--cookies-from-browser" not in cmd
+
+
+def test_stale_cookies_get_a_plain_english_error(tmp_path, monkeypatch):
+    """Bot check WITH a cookie file present = the export rotated out;
+    the error must say how to fix it, not dump yt-dlp's novel."""
+    jar = tmp_path / "cookies.txt"
+    jar.write_text("# jar", encoding="utf-8")
+    monkeypatch.setattr(get_bg, "COOKIES_FILE", jar)
+
+    class Bot:
+        returncode = 1
+        stderr = "Sign in to confirm you're not a bot"
+        stdout = ""
+
+    monkeypatch.setattr(get_bg.subprocess, "run", lambda *a, **k: Bot())
+    with pytest.raises(RuntimeError, match="stale"):
+        get_bg.fetch("https://youtu.be/x", "gta", tmp_path)
 
 
 def test_cookies_file_is_gitignored():

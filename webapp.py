@@ -133,6 +133,25 @@ def build_fetch_cmd(url: str, tag: str) -> list[str]:
     return [sys.executable, str(ROOT / "get_bg.py"), url, "--tag", tag]
 
 
+def build_random_cmd() -> list[str]:
+    return [sys.executable, str(ROOT / "get_bg.py"), "--random"]
+
+
+def build_reddit_cmd(count: int, bg_tag: str | None) -> list[str]:
+    cmd = [sys.executable, str(ROOT / "reddit_stories.py"),
+           "--count", str(count)]
+    if bg_tag:
+        cmd += ["--bg-tag", bg_tag]
+    return cmd
+
+
+def build_ideas_cmd(theme: str | None) -> list[str]:
+    cmd = [sys.executable, str(ROOT / "ideas.py"), "--json"]
+    if theme:
+        cmd += ["--theme", theme]
+    return cmd
+
+
 def build_write_cmd(topic: str, dialogue: bool, style: str | None,
                     bg: str | None, cast: list[str] | None = None) -> list[str]:
     cmd = [sys.executable, str(ROOT / "write_script.py"), topic]
@@ -341,6 +360,40 @@ def api_fetch_bg():
               name=f"youtube -> {tag}: {url[:60]}")
     JOBS[job.id] = job
     QUEUE.put((job, build_fetch_cmd(url, tag), None))
+    return jsonify({"id": job.id}), 202
+
+
+@app.post("/api/fetch_random")
+def api_fetch_random():
+    job = Job(id=uuid.uuid4().hex[:10], kind="fetch",
+              name="random clip from the no-copyright playlists")
+    JOBS[job.id] = job
+    QUEUE.put((job, build_random_cmd(), None))
+    return jsonify({"id": job.id}), 202
+
+
+@app.post("/api/reddit")
+def api_reddit():
+    data = request.get_json(force=True, silent=True) or {}
+    count = max(1, min(int(data.get("count") or 1), 5))
+    bg_tag = (data.get("bg_tag") or "").strip() or None
+    if bg_tag and not TAG_RE.match(bg_tag):
+        return jsonify({"error": "bad background folder name"}), 400
+    job = Job(id=uuid.uuid4().hex[:10], kind="render",
+              name=f"reddit story x{count}")
+    JOBS[job.id] = job
+    QUEUE.put((job, build_reddit_cmd(count, bg_tag), None))
+    return jsonify({"id": job.id}), 202
+
+
+@app.post("/api/ideas")
+def api_ideas():
+    data = request.get_json(force=True, silent=True) or {}
+    theme = (data.get("theme") or "").strip()[:200] or None
+    job = Job(id=uuid.uuid4().hex[:10], kind="ideas",
+              name=f"ideas: {theme or 'mixed themes'}")
+    JOBS[job.id] = job
+    QUEUE.put((job, build_ideas_cmd(theme), None))
     return jsonify({"id": job.id}), 202
 
 

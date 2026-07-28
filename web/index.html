@@ -76,6 +76,15 @@
 <header><h1>BRAINROT STUDIO</h1><span>script in, 9:16 banger out - runs 100% on this PC</span></header>
 <main>
   <section>
+    <h2>0 · ideas</h2>
+    <div class="row">
+      <input type="text" id="ideaTheme" placeholder="theme (optional): psychology, money, history...">
+      <button id="ideaBtn">get ideas</button>
+      <button id="redditBtn">reddit story</button>
+    </div>
+    <div class="status" id="ideaStatus"></div>
+    <div id="ideaList" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px"></div>
+
     <h2>1 · script</h2>
     <div class="row">
       <input type="text" id="topic" placeholder='topic, e.g. "why school is a scam"'>
@@ -134,6 +143,7 @@ dialogue mode:
     <div class="row" style="margin-top:8px">
       <input type="text" id="ytUrl" placeholder="or paste a YouTube link (1080p pulled automatically)">
       <button id="ytBtn">add from link</button>
+      <button id="randomBtn">random clip</button>
     </div>
     <div class="status" id="upStatus"></div>
   </section>
@@ -287,6 +297,59 @@ async function fetchFromYouTube() {
   refresh();
 }
 
+async function pollJob(id, onDone, st) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    const j = await jfetch("/api/jobs/" + id);
+    if (j.state === "done") { onDone(j); return; }
+    if (j.state === "failed") { st.className = "status err"; st.textContent = j.error; return; }
+  }
+}
+
+async function getIdeas() {
+  const st = $("ideaStatus");
+  $("ideaBtn").disabled = true;
+  st.className = "status"; st.textContent = "asking your local Claude for pitches...";
+  try {
+    const {id} = await jfetch("/api/ideas", { theme: $("ideaTheme").value.trim() });
+    await pollJob(id, j => {
+      const line = j.log.find(l => l.trim().startsWith('{"ideas"'));
+      const ideas = line ? JSON.parse(line).ideas : [];
+      $("ideaList").innerHTML = ideas.map(i =>
+        `<button class="chipIdea" data-title="${i.title.replace(/"/g, "&quot;")}"
+           title="${i.hook.replace(/"/g, "&quot;")}"
+           style="font-weight:500;font-size:13px">${i.title}</button>`).join("");
+      [...document.querySelectorAll(".chipIdea")].forEach(b => b.onclick = () => {
+        $("topic").value = b.dataset.title;
+        st.textContent = `picked: "${b.dataset.title}" - now hit write with AI (hover chips for hooks)`;
+      });
+      st.textContent = `${ideas.length} pitches - click one to build on it, hover for the hook`;
+    }, st);
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  $("ideaBtn").disabled = false;
+  refresh();
+}
+
+async function redditStory() {
+  const st = $("ideaStatus");
+  try {
+    await jfetch("/api/reddit", { count: 1, bg_tag: $("bg").value });
+    st.className = "status";
+    st.textContent = "hunting today's top reddit story - watch the jobs panel, video lands in the gallery";
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  refresh();
+}
+
+async function randomClip() {
+  const st = $("upStatus");
+  try {
+    await jfetch("/api/fetch_random", {});
+    st.className = "status";
+    st.textContent = "pulling a surprise clip from the no-copyright playlists (auto-sorted by game)";
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  refresh();
+}
+
 async function openFolder() {
   const st = $("upStatus");
   const data = await jfetch("/api/open", {});
@@ -331,6 +394,9 @@ $("castB").addEventListener("change", castVibe);
 $("upBtn").onclick = uploadClip;
 $("openBtn").onclick = openFolder;
 $("ytBtn").onclick = fetchFromYouTube;
+$("ideaBtn").onclick = getIdeas;
+$("redditBtn").onclick = redditStory;
+$("randomBtn").onclick = randomClip;
 loadConfig().then(() => { previewFont(); refresh(); });
 setInterval(refresh, 2000);
 </script>
