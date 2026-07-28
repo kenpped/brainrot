@@ -176,3 +176,71 @@ def test_index_serves_page(client):
     res = client.get("/")
     assert res.status_code == 200
     assert b"BRAINROT STUDIO" in res.data
+
+
+# ---- uploads ---------------------------------------------------------------
+
+def upload(client, filename="clip.mp4", tag="minecraft", data=b"fake video"):
+    import io
+    return client.post("/api/upload", data={
+        "file": (io.BytesIO(data), filename), "tag": tag,
+    }, content_type="multipart/form-data")
+
+
+def test_upload_happy_path(client, monkeypatch):
+    monkeypatch.setattr(webapp.br, "probe_duration", lambda p: 600.0)
+    res = upload(client)
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body == {"tag": "minecraft", "name": "clip.mp4", "minutes": 10.0}
+    assert (webapp.BG_DIR / "minecraft" / "clip.mp4").read_bytes() == b"fake video"
+
+
+def test_upload_rejects_bad_tag_and_ext(client):
+    assert upload(client, tag="My Clips!").status_code == 400
+    assert upload(client, filename="clip.exe").status_code == 400
+    assert client.post("/api/upload", data={"tag": "minecraft"},
+                       content_type="multipart/form-data").status_code == 400
+
+
+def test_upload_removes_undecodable_file(client, monkeypatch):
+    def boom(p):
+        raise RuntimeError("not a video")
+    monkeypatch.setattr(webapp.br, "probe_duration", boom)
+    res = upload(client, filename="junk.mp4", tag="gta")
+    assert res.status_code == 400
+    assert not (webapp.BG_DIR / "gta" / "junk.mp4").exists()
+
+
+def test_upload_uniquifies_collisions(client, monkeypatch):
+    monkeypatch.setattr(webapp.br, "probe_duration", lambda p: 60.0)
+    assert upload(client).get_json()["name"] == "clip.mp4"
+    assert upload(client).get_json()["name"] == "clip-2.mp4"
+
+
+def test_open_endpoint_returns_path(client, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(webapp.subprocess, "Popen",
+                        lambda cmd, **k: seen.setdefault("cmd", cmd))
+    res = client.post("/api/open")
+    assert res.status_code == 200
+    assert res.get_json()["path"] == str(webapp.BG_DIR)
+    assert "explorer.exe" in seen["cmd"][0] or seen["cmd"][0] in ("open", "xdg-open")
+
+
+# ---- LAN token gate --------------------------------------------------------
+
+def test_lan_gate_blocks_without_token(client):
+    webapp.app.config["LAN_TOKEN"] = "sekrit"
+    try:
+        assert client.get("/api/config").status_code == 401
+        ok = client.get("/api/config?token=sekrit")
+        assert ok.status_code == 200
+        assert "brainrot_token=sekrit" in ok.headers.get("Set-Cookie", "")
+        assert client.get("/api/config").status_code == 200  # cookie persists
+    finally:
+        webapp.app.config.pop("LAN_TOKEN", None)
+
+
+def test_no_token_configured_means_open(client):
+    assert client.get("/api/config").status_code == 200

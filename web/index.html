@@ -120,6 +120,18 @@ dialogue mode:
          letter-spacing:.5px;text-align:center;">FONT PREVIEW +1</div>
     <button class="primary" id="go">&#9889; generate video</button>
     <div class="status" id="goStatus"></div>
+
+    <h2>3 · add background clips</h2>
+    <div class="row">
+      <input type="text" id="upTag" list="tagList" placeholder="folder, e.g. minecraft" style="max-width:160px">
+      <datalist id="tagList"></datalist>
+      <input type="file" id="upFile" accept=".mp4,.mov,.mkv,.webm" style="flex:1">
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="upBtn">upload clip</button>
+      <button id="openBtn">open folder on PC</button>
+    </div>
+    <div class="status" id="upStatus"></div>
   </section>
 
   <section>
@@ -156,6 +168,7 @@ async function loadConfig() {
     cfg.voices.map(v => `<option value="${v.voice}">${v.voice.replace("Neural","")} - ${v.vibe}</option>`).join("");
   $("bg").innerHTML = '<option value="">any folder</option>' +
     cfg.bg_tags.map(t => `<option>${t}</option>`).join("");
+  $("tagList").innerHTML = cfg.bg_tags.map(t => `<option>${t}</option>`).join("");
   $("font").innerHTML = '<option value="">style default</option>' +
     cfg.fonts.map(f => `<option style="font-family:'${f}'">${f}</option>`).join("");
   const charOpts = cfg.characters.map(c => `<option value="${c.name}">${c.name}</option>`).join("");
@@ -227,6 +240,36 @@ async function generate() {
   refresh();
 }
 
+async function uploadClip() {
+  const st = $("upStatus");
+  const file = $("upFile").files[0];
+  const tag = $("upTag").value.trim().toLowerCase();
+  if (!file) { st.className = "status err"; st.textContent = "pick a video file first"; return; }
+  if (!tag) { st.className = "status err"; st.textContent = "type a folder name, e.g. minecraft"; return; }
+  $("upBtn").disabled = true;
+  st.className = "status";
+  st.textContent = `uploading ${file.name} (${(file.size / 1e6).toFixed(0)} MB)...`;
+  try {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("tag", tag);
+    const res = await fetch("/api/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    st.textContent = `in: ${data.tag}/${data.name} (${data.minutes} min)`;
+    $("upFile").value = "";
+    await loadConfig();
+  } catch (e) { st.className = "status err"; st.textContent = e.message; }
+  $("upBtn").disabled = false;
+}
+
+async function openFolder() {
+  const st = $("upStatus");
+  const data = await jfetch("/api/open", {});
+  st.className = "status";
+  st.textContent = `folder: ${data.path} (window opened, or paste this path into Explorer)`;
+}
+
 let hadActive = false;
 async function refresh() {
   const jobs = await jfetch("/api/jobs");
@@ -260,6 +303,8 @@ $("dialogue").addEventListener("change", () => {
 });
 $("castA").addEventListener("change", castVibe);
 $("castB").addEventListener("change", castVibe);
+$("upBtn").onclick = uploadClip;
+$("openBtn").onclick = openFolder;
 loadConfig().then(() => { previewFont(); refresh(); });
 setInterval(refresh, 2000);
 </script>

@@ -11,7 +11,11 @@ Local only -- binds 127.0.0.1, nothing is uploaded anywhere.
 
 from __future__ import annotations
 
+import argparse
 import queue
+import re
+import secrets
+import socket
 import subprocess
 import sys
 import threading
@@ -34,8 +38,33 @@ BG_DIR = ROOT / "backgrounds"
 WEB_SCRIPTS = ROOT / "scripts" / "web"
 PAGE = ROOT / "web" / "index.html"
 PORT = 8765
+TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
+MAX_UPLOAD_MB = 800
 
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MB * 1024 * 1024
+
+
+@app.before_request
+def _lan_gate():
+    """In LAN mode every request needs the token printed at startup, either
+    as ?token= (first visit, sets a cookie) or the cookie itself."""
+    token = app.config.get("LAN_TOKEN")
+    if not token:
+        return None
+    if request.cookies.get("brainrot_token") == token \
+            or request.args.get("token") == token:
+        return None
+    return jsonify({"error": "missing token - open the exact link printed "
+                             "in the terminal, including ?token="}), 401
+
+
+@app.after_request
+def _lan_cookie(resp):
+    token = app.config.get("LAN_TOKEN")
+    if token and request.args.get("token") == token:
+        resp.set_cookie("brainrot_token", token, httponly=True)
+    return resp
 
 
 @dataclass
@@ -259,6 +288,52 @@ def api_job(jid):
                     "out": job.out})
 
 
+@app.post("/api/upload")
+def api_upload():
+    """Drop a background clip straight into backgrounds/<tag>/ from the page.
+    The file must actually decode (ffprobe) or it's rejected and removed."""
+    f = request.files.get("file")
+    tag = (request.form.get("tag") or "").strip().lower()
+    if f is None or not f.filename:
+        return jsonify({"error": "no file attached"}), 400
+    if not TAG_RE.match(tag):
+        return jsonify({"error": "folder name must be lowercase letters, "
+                                 "numbers, dashes (e.g. minecraft)"}), 400
+    ext = Path(f.filename).suffix.lower()
+    if ext not in br.VIDEO_EXTS:
+        return jsonify({"error": f"file must be one of "
+                                 f"{', '.join(sorted(br.VIDEO_EXTS))}"}), 400
+    dest_dir = BG_DIR / tag
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9._ -]", "_", Path(f.filename).name)
+    dest = uniquify(dest_dir / safe)
+    f.save(str(dest))
+    try:
+        minutes = br.probe_duration(dest) / 60
+    except (RuntimeError, ValueError):
+        dest.unlink(missing_ok=True)
+        return jsonify({"error": "ffmpeg can't read that file - is it a real "
+                                 "video?"}), 400
+    return jsonify({"tag": tag, "name": dest.name,
+                    "minutes": round(minutes, 1)})
+
+
+@app.post("/api/open")
+def api_open():
+    """Open the backgrounds folder in the OS file manager. Returns the path
+    either way so the page can show it for manual navigation."""
+    try:
+        if sys.platform == "win32":
+            subprocess.Popen(["explorer.exe", str(BG_DIR)])
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(BG_DIR)])
+        else:
+            subprocess.Popen(["xdg-open", str(BG_DIR)])
+    except OSError:
+        pass
+    return jsonify({"path": str(BG_DIR)})
+
+
 @app.get("/api/videos")
 def api_videos():
     if not OUT_DIR.is_dir():
@@ -273,11 +348,31 @@ def video(name):
     return send_from_directory(OUT_DIR, name, conditional=True)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    ap = argparse.ArgumentParser(description="brainrot studio web app")
+    ap.add_argument("--lan", action="store_true",
+                    help="also serve to phones/PCs on your wifi "
+                         "(token-protected, printed at startup)")
+    args = ap.parse_args(argv)
+
     OUT_DIR.mkdir(exist_ok=True)
     start_worker()
+    host = "127.0.0.1"
     print(f"brainrot studio -> http://127.0.0.1:{PORT}", flush=True)
-    app.run(host="127.0.0.1", port=PORT, threaded=True)
+    if args.lan:
+        token = secrets.token_urlsafe(8)
+        app.config["LAN_TOKEN"] = token
+        host = "0.0.0.0"
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            probe.connect(("8.8.8.8", 80))
+            lan_ip = probe.getsockname()[0]
+            probe.close()
+        except OSError:
+            lan_ip = "<this-pc-ip>"
+        print(f"on your phone (same wifi) -> "
+              f"http://{lan_ip}:{PORT}/?token={token}", flush=True)
+    app.run(host=host, port=PORT, threaded=True)
 
 
 if __name__ == "__main__":
