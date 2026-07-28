@@ -56,11 +56,17 @@ def test_playlist_mode_flags(tmp_path):
     assert pl[pl.index("--match-filters") + 1] == f"duration<{get_bg.MAX_MINUTES * 60}"
 
 
-def test_format_caps_at_1080_both_orientations():
-    assert "height<=1080" in get_bg.FORMAT          # landscape cap
-    assert "width<=1080" in get_bg.FORMAT           # vertical: 1080x1920 has height 1920
-    assert "bestvideo" in get_bg.FORMAT
-    assert get_bg.FORMAT.endswith("/best")          # never zero-format again
+def test_resolution_cap_is_orientation_proof():
+    """res: sorts by the SMALLER dimension - a height<=1080 FILTER once
+    fetched five 360x640 files off vertical videos."""
+    assert "res:1080" in get_bg.SORT
+    assert "height<=" not in get_bg.FORMAT and "width<=" not in get_bg.FORMAT
+    assert get_bg.FORMAT.endswith("/b")             # never zero-format
+
+
+def test_download_cmd_carries_sort(tmp_path):
+    cmd = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
+    assert cmd[cmd.index("-S") + 1] == get_bg.SORT
 
 
 def test_build_download_cmd(tmp_path):

@@ -34,12 +34,12 @@ YT_RE = re.compile(
     re.I)
 PLAYLIST_RE = re.compile(r"youtube\.com/playlist\?", re.I)
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
-# best video-only stream up to 1080p-equivalent in EITHER orientation
-# (a vertical "1080p" is 1080x1920, so its height is 1920 - capping height
-# alone rejects every vertical format). Audio gets replaced anyway.
-FORMAT = ("bestvideo[height<=1080][ext=mp4]/bestvideo[width<=1080][ext=mp4]/"
-          "bestvideo[height<=1080]/bestvideo[width<=1080]/"
-          "best[height<=1080]/best[width<=1080]/best")
+# Orientation-proof 1080p cap via SORT, not filters: yt-dlp's `res` sort
+# field is the SMALLER dimension, so vertical 1080x1920 and landscape
+# 1920x1080 both count as 1080. (A height<=1080 FILTER on a vertical video
+# happily matches the 360x640 tier - learned by downloading five of them.)
+FORMAT = "bv/b"
+SORT = "res:1080,fps,vcodec:h264"
 MAX_MINUTES = 45   # playlist entries longer than this get skipped
 # Netscape-format cookie export (gitignored, NEVER commit: session tokens).
 # Chrome's app-bound encryption blocks --cookies-from-browser on Windows, so
@@ -92,7 +92,7 @@ def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
     """cookies.txt (if present) beats --cookies-from-browser: the export
     from inside the browser works where DPAPI decryption cannot."""
     cmd = [
-        ytdlp_bin(), "-f", FORMAT, "--remux-video", "mp4",
+        ytdlp_bin(), "-f", FORMAT, "-S", SORT, "--remux-video", "mp4",
         "--restrict-filenames",
         "-o", str(dest_dir / "%(title).60s [%(id)s].%(ext)s"),
         "--no-simulate", "--print", "after_move:filepath",
