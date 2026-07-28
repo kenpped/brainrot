@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from brainrot import render
+from post_card import make_post_card
 from write_script import (RETRY_SUFFIX, SENTINEL_BEGIN, SENTINEL_END,
                           ask_claude, extract_script, slugify)
 
@@ -131,12 +132,14 @@ def parse_rss(xml_text: str, sub: str) -> list[dict]:
         raw_id = (entry.findtext("a:id", "", ns) or "").strip()
         content = entry.findtext("a:content", "", ns) or ""
         title = (entry.findtext("a:title", "", ns) or "").strip()
+        author = (entry.findtext("a:author/a:name", "", ns) or "").strip()
         if not raw_id or not content:
             continue
         posts.append({
             "id": raw_id.removeprefix("t3_"),
             "title": html.unescape(title),
             "selftext": _strip_html(content),
+            "author": author.lstrip("/").removeprefix("u/") or None,
             "score": None,
             "stickied": False,
             "over_18": "nsfw" in title.lower(),
@@ -195,6 +198,17 @@ def fetch_top(sub: str, t: str = "day", limit: int = 25) -> list[dict]:
     raise last_error
 
 
+def fetch_with_retry(sub: str, t: str) -> list[dict]:
+    """One 429 means slow down, not give up: cool off once and retry."""
+    try:
+        return fetch_top(sub, t)
+    except Exception as e:
+        if "429" not in str(e):
+            raise
+        time.sleep(30)
+        return fetch_top(sub, t)
+
+
 def retell(post: dict) -> str | None:
     prompt = build_retell_prompt(post.get("title", ""), post.get("selftext", ""))
     for attempt in range(2):
@@ -221,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="fetch + pick only; no Claude, no rendering")
     ap.add_argument("--no-render", action="store_true",
                     help="write the scripts but skip rendering")
+    ap.add_argument("--no-card", action="store_true",
+                    help="skip the Reddit post header card overlay")
     args = ap.parse_args(argv)
 
     used = load_used()
@@ -228,9 +244,9 @@ def main(argv: list[str] | None = None) -> int:
     subs = [s.strip() for s in args.subs.split(",") if s.strip()]
     for i, sub in enumerate(subs):
         if i:
-            time.sleep(2)  # 429s arrive fast without spacing
+            time.sleep(8)  # 429s arrive fast without generous spacing
         try:
-            posts.extend(fetch_top(sub, args.t))
+            posts.extend(fetch_with_retry(sub, args.t))
         except Exception as e:  # one dead subreddit must not kill the day
             fetch_errors.append(f"{sub}: {e}")
     print(f"fetched {len(posts)} posts"
@@ -269,6 +285,16 @@ def main(argv: list[str] | None = None) -> int:
         front = [f"style: {args.style}"]
         if args.bg_tag:
             front.append(f"bg: {args.bg_tag}")
+        if not args.no_card:
+            card = make_post_card(
+                title=post.get("title", ""),
+                subreddit=post.get("subreddit", "AITAH"),
+                author=post.get("author"),
+                score=post.get("score"),
+                comments=post.get("num_comments"),
+                out_png=REDDIT_DIR / f"{story_slug(post)}-card.png",
+            )
+            front.append(f"overlay: {card.name}")  # resolves next to the script
         dest = REDDIT_DIR / f"{story_slug(post)}.txt"
         dest.write_text("\n".join(front) + "\n---\n" + script + "\n",
                         encoding="utf-8")

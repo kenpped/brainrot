@@ -93,6 +93,7 @@ RSS_FIXTURE = """<?xml version="1.0" encoding="UTF-8"?>
   <entry>
     <id>t3_zz9</id>
     <title>AITA for eating the &amp;quot;shared&amp;quot; cake?</title>
+    <author><name>/u/storyteller99</name></author>
     <content type="html">&lt;div class="md"&gt;&lt;p&gt;{body}&lt;/p&gt;&lt;/div&gt;</content>
   </entry>
   <entry>
@@ -108,8 +109,24 @@ def test_parse_rss_builds_post_dicts():
     p = posts[0]
     assert p["id"] == "zz9" and p["subreddit"] == "AITAH"
     assert p["score"] is None
+    assert p["author"] == "storyteller99"        # /u/ prefix stripped
     assert "<" not in p["selftext"]              # html stripped
     assert 490 <= len(p["selftext"].split()) <= 510
+
+
+def test_fetch_with_retry_cools_off_on_429(monkeypatch):
+    calls = []
+
+    def flaky(sub, t):
+        calls.append(sub)
+        if len(calls) == 1:
+            raise RuntimeError("HTTP Error 429: Too Many Requests")
+        return [{"id": "ok"}]
+
+    monkeypatch.setattr(rs, "fetch_top", flaky)
+    monkeypatch.setattr(rs.time, "sleep", lambda s: None)
+    assert rs.fetch_with_retry("AITAH", "day") == [{"id": "ok"}]
+    assert len(calls) == 2
 
 
 def test_eligible_accepts_rss_posts_without_scores():

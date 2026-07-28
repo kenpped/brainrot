@@ -653,6 +653,44 @@ def test_list_backgrounds_missing_raises(tmp_path):
         br.list_backgrounds(tmp_path / "nope")
 
 
+# ---- overlay ---------------------------------------------------------------
+
+def test_build_filter_overlay_variant():
+    f = br.build_filter(Path(r"C:\tmp\subs.ass"), with_overlay=True)
+    assert f.startswith("[0:v]crop=")
+    assert f"[v];[v][2:v]overlay=(main_w-overlay_w)/2:{br.OVERLAY_Y}[vo]" in f
+
+
+def test_parse_script_overlay_key(tmp_path):
+    f = tmp_path / "s.txt"
+    f.write_text("overlay: card.png\n---\nhello", encoding="utf-8")
+    _, meta = br.parse_script(f)
+    assert meta["overlay"] == "card.png"
+
+
+def test_resolve_overlay_prefers_script_dir(tmp_path):
+    script = tmp_path / "story.txt"
+    script.write_text("x", encoding="utf-8")
+    card = tmp_path / "card.png"
+    card.write_bytes(b"png")
+    assert br.resolve_overlay("card.png", script) == card
+    with pytest.raises(ValueError, match="overlay not found"):
+        br.resolve_overlay("missing.png", script)
+
+
+def test_render_rejects_missing_overlay_before_tts(tmp_path, monkeypatch):
+    script = tmp_path / "s.txt"
+    script.write_text("overlay: nope.png\n---\nhello", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("TTS ran before overlay validation")
+
+    monkeypatch.setattr(br, "synth_voiceover", boom)
+    monkeypatch.setattr(br.shutil, "which", lambda _: "ffmpeg")
+    with pytest.raises(ValueError, match="overlay not found"):
+        br.render(script, tmp_path / "missing", tmp_path / "o.mp4")
+
+
 # ---- choose_clip -----------------------------------------------------------
 
 def test_choose_clip_offset_in_range_and_deterministic():

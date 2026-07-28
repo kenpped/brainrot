@@ -112,7 +112,8 @@ DEFAULTS = {
 PHRASE_MAX_WORDS = 4
 PHRASE_GAP_BREAK = 0.6
 STYLE_KEYS = set(DEFAULTS)
-FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast"}
+FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast", "overlay"}
+OVERLAY_Y = 96                 # px from the top for the overlay card
 DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
 SPEAKER_PALETTE = ["white", "yellow", "cyan", "lime", "pink"]  # caption color per speaker
 
@@ -592,17 +593,36 @@ def ffmpeg_filter_path(path: Path) -> str:
     return s.replace(":", "\\:")
 
 
-def build_filter(ass_path: Path) -> str:
+def build_filter(ass_path: Path, with_overlay: bool = False) -> str:
     """Center-crop to 9:16, scale to 1080x1920, burn the captions.
 
     Lanczos + contrast-adaptive sharpening make low-res gameplay upscale as
     well as upscaling can: sharper edges, less mush. Captions are burned
-    after sharpening so the text stays clean."""
-    return (
+    after sharpening so the text stays clean. With an overlay (input 2, e.g.
+    a Reddit post card PNG) the chain becomes a filter_complex that pins it
+    centered near the top."""
+    chain = (
         f"crop=min(iw\\,ih*{OUT_W}/{OUT_H}):min(ih\\,iw*{OUT_H}/{OUT_W}),"
         f"scale={OUT_W}:{OUT_H}:flags=lanczos,cas=0.7,setsar=1,"
         f"ass='{ffmpeg_filter_path(ass_path)}'"
     )
+    if with_overlay:
+        return (f"[0:v]{chain}[v];"
+                f"[v][2:v]overlay=(main_w-overlay_w)/2:{OVERLAY_Y}[vo]")
+    return chain
+
+
+def resolve_overlay(spec: str, script_path: Path) -> Path:
+    """Overlay paths resolve next to the script first (generated cards live
+    beside their scripts), then project root, then as given."""
+    for base in (Path(script_path).parent, Path(__file__).resolve().parent):
+        candidate = base / spec
+        if candidate.is_file():
+            return candidate
+    p = Path(spec)
+    if p.is_file():
+        return p
+    raise ValueError(f"overlay not found: {spec}")
 
 
 def upscale_note(width: int, height: int) -> str:
@@ -836,6 +856,9 @@ def render(
         speakers_cfg = {n: {"voice": v} for n, v in front["speakers"].items()}
     dialogue = parse_dialogue(text, speakers_cfg) if speakers_cfg else None
 
+    overlay_spec = (cli or {}).get("overlay") or front.get("overlay")
+    overlay_path = resolve_overlay(overlay_spec, script_path) if overlay_spec else None
+
     backgrounds = list_backgrounds(Path(bg), tag=bg_tag)
     warn_if_font_missing(s["font"])
     out = Path(out)
@@ -905,9 +928,17 @@ def render(
         cmd += [
             "-ss", f"{offset:.3f}", "-i", str(bg_file),
             "-i", str(mux_path),
-            "-t", f"{need:.3f}",
-            "-vf", build_filter(ass_path),
-            "-map", "0:v:0", "-map", "1:a:0",
+        ]
+        if overlay_path:
+            cmd += ["-loop", "1", "-i", str(overlay_path)]
+        cmd += ["-t", f"{need:.3f}"]
+        if overlay_path:
+            cmd += ["-filter_complex", build_filter(ass_path, with_overlay=True),
+                    "-map", "[vo]", "-map", "1:a:0"]
+        else:
+            cmd += ["-vf", build_filter(ass_path),
+                    "-map", "0:v:0", "-map", "1:a:0"]
+        cmd += [
             "-af", "apad",
             "-r", str(FPS),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -953,6 +984,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--font", default=None, help="caption font name")
     ap.add_argument("--bg-tag", default=None,
                     help="pick backgrounds from a subfolder, e.g. minecraft")
+    ap.add_argument("--overlay", default=None,
+                    help="PNG pinned top-center (e.g. a Reddit post card)")
     ap.add_argument("--seed", type=int, default=None,
                     help="fix the random background/offset choice")
     ap.add_argument("--keep-temp", action="store_true",
@@ -964,7 +997,7 @@ def main(argv: list[str] | None = None) -> int:
 
     cli = {k: v for k, v in {
         "style": args.style, "voice": args.voice, "rate": args.rate,
-        "font": args.font, "bg_tag": args.bg_tag,
+        "font": args.font, "bg_tag": args.bg_tag, "overlay": args.overlay,
     }.items() if v is not None}
 
     try:
