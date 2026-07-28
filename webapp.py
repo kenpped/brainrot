@@ -310,12 +310,14 @@ def api_upload():
     f.save(str(dest))
     try:
         minutes = br.probe_duration(dest) / 60
+        width, height = br.probe_size(dest)
     except (RuntimeError, ValueError):
         dest.unlink(missing_ok=True)
         return jsonify({"error": "ffmpeg can't read that file - is it a real "
                                  "video?"}), 400
     return jsonify({"tag": tag, "name": dest.name,
-                    "minutes": round(minutes, 1)})
+                    "minutes": round(minutes, 1),
+                    "warn": br.upscale_note(width, height)})
 
 
 @app.post("/api/open")

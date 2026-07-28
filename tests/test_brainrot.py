@@ -256,8 +256,8 @@ def test_build_ass_dialogue_colors_beat_highlights():
     words = [("Your", 0.0, 0.2), ("brain", 2.6, 2.9)]
     spans = br.speaker_spans([("a", 2.0), ("b", 3.0)], gap=0.5)
     tags = br.speaker_color_tags(["a", "b"])
-    ass = br.build_ass(words, {"highlight": ["red"], "highlight_chance": 1.0},
-                       spans, tags)
+    ass = br.build_ass(words, {"captions": "word", "highlight": ["red"],
+                               "highlight_chance": 1.0}, spans, tags)
     dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
     assert br.COLORS["red"] not in dialogues[0] and br.COLORS["red"] not in dialogues[1]
     assert "\\c&H" not in dialogues[0]              # speaker a stays white
@@ -483,8 +483,8 @@ def test_build_ass_custom_style():
     assert "Style: Pop,Anton,150," in ass
 
 
-def test_build_ass_one_dialogue_per_word():
-    ass = br.build_ass(WORDS)
+def test_build_ass_word_mode_one_dialogue_per_word():
+    ass = br.build_ass(WORDS, {"captions": "word"})
     dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
     assert len(dialogues) == len(WORDS)
     assert dialogues[0].endswith("YOUR")
@@ -492,21 +492,75 @@ def test_build_ass_one_dialogue_per_word():
 
 
 def test_build_ass_highlights_forced_on():
-    ass = br.build_ass(WORDS, {"highlight": ["red"], "highlight_chance": 1.0})
+    ass = br.build_ass(WORDS, {"captions": "word", "highlight": ["red"],
+                               "highlight_chance": 1.0})
     dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
     assert all("{\\c&H0000FF&}" in l for l in dialogues)
 
 
 def test_build_ass_highlights_off():
-    ass = br.build_ass(WORDS, {"highlight": [], "highlight_chance": 0.0})
+    ass = br.build_ass(WORDS, {"captions": "word", "highlight": [],
+                               "highlight_chance": 0.0})
     assert "\\c&H" not in ass
 
 
-def test_build_ass_has_pop_animation_and_playres():
-    ass = br.build_ass(WORDS)
+def test_build_ass_word_mode_has_pop_animation_and_playres():
+    ass = br.build_ass(WORDS, {"captions": "word"})
     assert f"\\t(0,{br.POP_MS},\\fscx100\\fscy100)" in ass
     assert f"PlayResX: {br.OUT_W}" in ass
     assert f"PlayResY: {br.OUT_H}" in ass
+
+
+# ---- phrase captions (the few-words-with-lit-word default) -----------------
+
+PHRASE_WORDS = [("Your", 0.0, 0.2), ("brain", 0.25, 0.5), ("is", 0.55, 0.7),
+                ("lying.", 0.75, 1.0), ("Always", 1.1, 1.4)]
+
+
+def test_phrase_chunks_break_on_count_gap_punctuation_speaker():
+    d = [(i * 1.0, i * 1.0 + 0.4, f"W{i}", f"w{i}") for i in range(6)]
+    assert [len(c) for c in br.phrase_chunks(d, max_words=4, gap_break=99)] == [4, 2]
+    gap = [(0.0, 0.2, "A", "a"), (5.0, 5.2, "B", "b")]
+    assert len(br.phrase_chunks(gap)) == 2
+    punct = [(0.0, 0.2, "END", "end."), (0.25, 0.4, "NEXT", "next")]
+    assert len(br.phrase_chunks(punct)) == 2
+    spans = br.speaker_spans([("a", 1.0), ("b", 1.0)], gap=0.0)
+    two_speakers = [(0.0, 0.9, "HI", "hi"), (1.1, 1.9, "YO", "yo")]
+    assert len(br.phrase_chunks(two_speakers, spans)) == 2
+
+
+def test_build_ass_phrase_mode_is_default_and_lights_each_word():
+    ass = br.build_ass(PHRASE_WORDS)
+    dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert len(dialogues) == len(PHRASE_WORDS)   # one event per spoken word
+    yellow = "{\\c" + br.COLORS["yellow"] + "}"
+    # first chunk = 4 words; every event shows the full phrase text
+    for line in dialogues[:4]:
+        for w in ("YOUR", "BRAIN", "IS", "LYING"):
+            assert w in line
+    assert yellow + "YOUR" in dialogues[0]
+    assert yellow + "BRAIN" in dialogues[1]
+    assert yellow + "LYING" in dialogues[3]
+    assert yellow + "ALWAYS" in dialogues[4]     # new chunk after "lying."
+    assert "\\t(" not in ass                     # no pop in phrase mode
+
+
+def test_build_ass_phrase_events_are_time_contiguous():
+    ass = br.build_ass(PHRASE_WORDS)
+    dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    for a, b in zip(dialogues[:3], dialogues[1:4]):  # within the first chunk
+        assert a.split(",")[2] == b.split(",")[1]    # end == next start
+
+
+def test_build_ass_phrase_dialogue_lights_with_speaker_color():
+    spans = br.speaker_spans([("a", 0.6), ("b", 1.0)], gap=0.0)
+    tags = br.speaker_color_tags(["a", "b"],
+                                 {"a": {"color": "orange"}, "b": {"color": "cyan"}})
+    words = [("Wait", 0.0, 0.5), ("no", 0.7, 0.9), ("way", 1.0, 1.2)]
+    ass = br.build_ass(words, None, spans, tags)
+    dialogues = [l for l in ass.splitlines() if l.startswith("Dialogue:")]
+    assert "{\\c" + br.COLORS["orange"] + "}WAIT" in dialogues[0]
+    assert "{\\c" + br.COLORS["cyan"] + "}NO" in dialogues[1]
 
 
 def test_build_ass_times_are_ordered():

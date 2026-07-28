@@ -129,8 +129,9 @@ def write_video(path, frames, fps, w, h, total, label):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--what", choices=[*GENERATORS, "both"], default="both")
-    ap.add_argument("--minutes", type=float, default=2.0, help="length per clip")
-    ap.add_argument("--size", default="720x1280", help="WxH, gets cropped to 9:16 anyway")
+    ap.add_argument("--minutes", type=float, default=3.0, help="length per clip")
+    ap.add_argument("--size", default="1080x1920",
+                    help="WxH; native 1080x1920 = zero upscale, sharpest output")
     ap.add_argument("--fps", type=int, default=30)
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--outdir", type=Path,

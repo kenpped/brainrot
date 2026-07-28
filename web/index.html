@@ -256,7 +256,12 @@ async function uploadClip() {
     const res = await fetch("/api/upload", { method: "POST", body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    st.textContent = `in: ${data.tag}/${data.name} (${data.minutes} min)`;
+    if (data.warn) {
+      st.className = "status err";
+      st.textContent = `in: ${data.tag}/${data.name} (${data.minutes} min) BUT ${data.warn}`;
+    } else {
+      st.textContent = `in: ${data.tag}/${data.name} (${data.minutes} min, quality OK)`;
+    }
     $("upFile").value = "";
     await loadConfig();
   } catch (e) { st.className = "status err"; st.textContent = e.message; }

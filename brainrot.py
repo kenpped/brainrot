@@ -105,9 +105,12 @@ DEFAULTS = {
     "fontsize": 130,
     "outline": 9,
     "margin_v": 760,
-    "highlight": ["yellow", "lime"],   # random accent words, [] = all white
-    "highlight_chance": 0.22,
+    "captions": "phrase",              # phrase = few words shown, spoken word lit
+    "highlight": ["yellow", "lime"],   # word mode: random accents / phrase mode:
+    "highlight_chance": 0.22,          #   first color is the active-word light
 }
+PHRASE_MAX_WORDS = 4
+PHRASE_GAP_BREAK = 0.6
 STYLE_KEYS = set(DEFAULTS)
 FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast"}
 DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
@@ -167,6 +170,8 @@ def validate_style(name: str, s: dict) -> None:
                          f"got {s['pitch']!r}")
     if "fx" in s and s["fx"] not in VOICE_FX:
         raise ValueError(f"style '{name}': fx must be one of {sorted(VOICE_FX)}")
+    if "captions" in s and s["captions"] not in ("word", "phrase"):
+        raise ValueError(f"style '{name}': captions must be 'word' or 'phrase'")
 
 
 def load_styles(path: Path | None = None) -> dict:
@@ -465,17 +470,70 @@ def highlight_tag(index: int, word: str, colors: list[str], chance: float) -> st
     return "{\\c" + COLORS[colors[(h // 1000) % len(colors)]] + "}"
 
 
+def phrase_chunks(
+    display: list[tuple[float, float, str, str]],
+    spans: list[tuple[float, float, str]] | None = None,
+    max_words: int = PHRASE_MAX_WORDS,
+    gap_break: float = PHRASE_GAP_BREAK,
+) -> list[list[tuple[float, float, str, str]]]:
+    """Group display words [(start, end, shown, raw)] into caption phrases.
+    A phrase breaks at max_words, at a long silence, after sentence
+    punctuation, and never spans two dialogue speakers."""
+    chunks: list[list] = []
+    current: list = []
+    for item in display:
+        if current:
+            prev = current[-1]
+            speaker_changed = spans is not None and (
+                speaker_at(spans, prev[0]) != speaker_at(spans, item[0]))
+            if (len(current) >= max_words
+                    or item[0] - prev[1] > gap_break
+                    or prev[3].rstrip().endswith((".", "?", "!", ","))
+                    or speaker_changed):
+                chunks.append(current)
+                current = []
+        current.append(item)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _phrase_events(display, s, spans, speaker_tags) -> list[str]:
+    """One Dialogue event per word, each showing the whole phrase with the
+    spoken word lit. Identical text + centered layout means the phrase holds
+    perfectly still while the light moves."""
+    lit_color = s["highlight"][0] if s["highlight"] else "yellow"
+    white = "{\\c&HFFFFFF&}"
+    out = []
+    for chunk in phrase_chunks(display, spans):
+        lit = "{\\c" + COLORS[lit_color] + "}"
+        if spans and speaker_tags:
+            tag = speaker_tags.get(speaker_at(spans, chunk[0][0]), "")
+            if tag:
+                lit = tag
+        for i in range(len(chunk)):
+            seg_start = chunk[i][0]
+            seg_end = chunk[i + 1][0] if i + 1 < len(chunk) else chunk[-1][1]
+            text = " ".join(
+                (lit + word[2] + white) if j == i else word[2]
+                for j, word in enumerate(chunk))
+            out.append(f"Dialogue: 0,{ass_time(seg_start)},"
+                       f"{ass_time(seg_end)},Pop,,0,0,0,,{text}")
+    return out
+
+
 def build_ass(
     words: list[tuple[str, float, float]],
     style: dict | None = None,
     spans: list[tuple[float, float, str]] | None = None,
     speaker_tags: dict[str, str] | None = None,
 ) -> str:
-    """Word-by-word pop captions. One Dialogue event per word, centered,
-    bottom-anchored margin_v px up from the bottom of the 1080x1920 frame.
+    """Captions in two modes. phrase (default): a few words on screen with
+    the spoken one lit, TikTok style. word: one popping word at a time.
+    Centered, bottom-anchored margin_v px up from the 1080x1920 frame bottom.
 
-    In dialogue mode (spans + speaker_tags given) each word is colored by
-    whoever is talking at that moment, replacing the random highlights."""
+    In dialogue mode (spans + speaker_tags given) the lit word (phrase mode)
+    or every word (word mode) takes the speaker's color."""
     s = dict(DEFAULTS)
     s.update(style or {})
     style_line = (
@@ -487,7 +545,7 @@ def build_ass(
         "ScriptType: v4.00+",
         f"PlayResX: {OUT_W}",
         f"PlayResY: {OUT_H}",
-        "WrapStyle: 2",
+        "WrapStyle: 0",
         "ScaledBorderAndShadow: yes",
         "",
         "[V4+ Styles]",
@@ -501,11 +559,18 @@ def build_ass(
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, "
         "Effect, Text",
     ]
+    display = []
+    for start, end, raw in word_events(words):
+        shown = sanitize_word(raw)
+        if shown:
+            display.append((start, end, shown, raw))
+
+    if s["captions"] == "phrase":
+        lines.extend(_phrase_events(display, s, spans, speaker_tags))
+        return "\n".join(lines) + "\n"
+
     pop = f"{{\\fscx70\\fscy70\\t(0,{POP_MS},\\fscx100\\fscy100)}}"
-    for i, (start, end, text) in enumerate(word_events(words)):
-        shown = sanitize_word(text)
-        if not shown:
-            continue
+    for i, (start, end, shown, _raw) in enumerate(display):
         if spans and speaker_tags:
             color = speaker_tags.get(speaker_at(spans, start), "")
         else:

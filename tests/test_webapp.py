@@ -189,11 +189,20 @@ def upload(client, filename="clip.mp4", tag="minecraft", data=b"fake video"):
 
 def test_upload_happy_path(client, monkeypatch):
     monkeypatch.setattr(webapp.br, "probe_duration", lambda p: 600.0)
+    monkeypatch.setattr(webapp.br, "probe_size", lambda p: (1080, 1920))
     res = upload(client)
     assert res.status_code == 200
     body = res.get_json()
-    assert body == {"tag": "minecraft", "name": "clip.mp4", "minutes": 10.0}
+    assert body == {"tag": "minecraft", "name": "clip.mp4", "minutes": 10.0,
+                    "warn": ""}
     assert (webapp.BG_DIR / "minecraft" / "clip.mp4").read_bytes() == b"fake video"
+
+
+def test_upload_warns_on_low_res(client, monkeypatch):
+    monkeypatch.setattr(webapp.br, "probe_duration", lambda p: 600.0)
+    monkeypatch.setattr(webapp.br, "probe_size", lambda p: (202, 360))
+    body = upload(client, filename="tiny.mp4").get_json()
+    assert "soft" in body["warn"] and "720p+" in body["warn"]
 
 
 def test_upload_rejects_bad_tag_and_ext(client):
@@ -214,6 +223,7 @@ def test_upload_removes_undecodable_file(client, monkeypatch):
 
 def test_upload_uniquifies_collisions(client, monkeypatch):
     monkeypatch.setattr(webapp.br, "probe_duration", lambda p: 60.0)
+    monkeypatch.setattr(webapp.br, "probe_size", lambda p: (1080, 1920))
     assert upload(client).get_json()["name"] == "clip.mp4"
     assert upload(client).get_json()["name"] == "clip-2.mp4"
 
