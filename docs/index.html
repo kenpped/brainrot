@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>brainrot studio — free brainrot video pipeline</title>
+<meta name="description" content="Script in, 9:16 narrated video with word-by-word captions out. AI characters, voice effects, dialogue mode. Free, open, runs on your PC.">
+<style>
+  :root { --bg:#0b0d12; --panel:#141824; --panel2:#1b2032; --line:#262d42;
+          --text:#e8ecf6; --muted:#8b93ab; --gold:#ffd60a; --hot:#ff3d68; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--text);
+         font:16px/1.55 system-ui,"Segoe UI",sans-serif; }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 24px; }
+  header { padding:80px 0 40px; text-align:center; }
+  h1 { font-family:Impact,system-ui; font-size:clamp(42px,8vw,76px); letter-spacing:1px;
+       background:linear-gradient(90deg,var(--gold),var(--hot));
+       -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .tag { color:var(--muted); font-size:19px; margin-top:10px; }
+  .cta { display:inline-block; margin-top:26px; padding:14px 26px; border-radius:10px;
+         background:linear-gradient(90deg,var(--gold),var(--hot)); color:#14100a;
+         font-weight:800; text-decoration:none; font-size:17px; }
+  .cta.ghost { background:none; border:1px solid var(--line); color:var(--text); margin-left:10px; }
+  section { padding:36px 0; }
+  h2 { font-size:14px; text-transform:uppercase; letter-spacing:2px; color:var(--muted);
+       margin-bottom:18px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:18px; }
+  .card b { display:block; margin-bottom:6px; font-size:17px; }
+  .card span { color:var(--muted); font-size:14px; }
+  .demos { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:16px; }
+  .demos video { width:100%; aspect-ratio:9/16; border-radius:14px; border:1px solid var(--line);
+                 background:#000; }
+  pre { background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+        padding:16px; overflow-x:auto; font-size:14px; color:var(--text); }
+  .honest { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--gold);
+            border-radius:10px; padding:16px 18px; color:var(--muted); font-size:15px; }
+  footer { padding:50px 0 70px; color:var(--muted); font-size:13px; text-align:center; }
+  a { color:var(--gold); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>BRAINROT STUDIO</h1>
+    <div class="tag">Script in. 9:16 banger out. Free, open, runs on your PC.</div>
+    <a class="cta" href="https://github.com/{{GITHUB_USER}}/brainrot">Get it on GitHub</a>
+    <a class="cta ghost" href="#start">Quick start</a>
+  </header>
+
+  <section>
+    <h2>Made with it</h2>
+    <div class="demos">
+      <video src="https://github.com/{{GITHUB_USER}}/brainrot/releases/download/v0.1/robot-demon.mp4" controls preload="metadata"></video>
+      <video src="https://github.com/{{GITHUB_USER}}/brainrot/releases/download/v0.1/dopamine-subway.mp4" controls preload="metadata"></video>
+      <video src="https://github.com/{{GITHUB_USER}}/brainrot/releases/download/v0.1/battery-winter.mp4" controls preload="metadata"></video>
+    </div>
+  </section>
+
+  <section>
+    <h2>What it does</h2>
+    <div class="grid">
+      <div class="card"><b>Topic to video</b><span>Type a topic, the AI writes the script through your local Claude Code, the pipeline voices and renders it. One command or one click.</span></div>
+      <div class="card"><b>AI characters</b><span>7 original personas with their own voices, pitch shifts, caption colors, and personalities the AI writes dialogue in. Robot vs demon is a genre.</span></div>
+      <div class="card"><b>Voice effects</b><span>Robot, demon, chipmunk, megaphone, radio, phone, echo. ffmpeg processing over 400+ free voices. No voice cloning, ever.</span></div>
+      <div class="card"><b>Word-pop captions</b><span>Whisper word timestamps drive one-word-at-a-time captions with accent colors. Impact 130, outline 9, the loud look.</span></div>
+      <div class="card"><b>Local web studio</b><span>A localhost site with style presets, cast pickers, font preview, background uploads, job queue, and a video gallery.</span></div>
+      <div class="card"><b>Batch + resume</b><span>Point it at a folder of scripts. Kill it whenever. It skips what's rendered and keeps voices stable per script.</span></div>
+    </div>
+  </section>
+
+  <section id="start">
+    <h2>Quick start</h2>
+    <pre>git clone https://github.com/{{GITHUB_USER}}/brainrot
+cd brainrot
+python -m venv .venv && .venv\Scripts\activate
+pip install -r requirements.txt
+winget install Gyan.FFmpeg
+
+python webapp.py        # the studio, at localhost:8765
+python make_bg.py       # copyright-free backgrounds to start with</pre>
+  </section>
+
+  <section>
+    <div class="honest">
+      <b style="color:var(--text)">Why is it free?</b> Because nothing runs on a server.
+      Rendering, voices, and captions all happen on your machine, and script writing uses
+      your own local Claude Code. No accounts, no credits, no watermark, nothing to sell you.
+      Bring your own gameplay footage and be smart about whose footage it is.
+    </div>
+  </section>
+
+  <footer>
+    brainrot studio &middot; built with <a href="https://claude.com/claude-code">Claude Code</a>
+    &middot; voices via edge-tts &middot; transcription via faster-whisper &middot; no voice cloning
+  </footer>
+</div>
+</body>
+</html>
