@@ -528,11 +528,25 @@ def test_ffmpeg_filter_path_rejects_quote():
         br.ffmpeg_filter_path(Path("C:\\ken's\\subs.ass"))
 
 
-def test_build_filter_crops_scales_burns():
+def test_build_filter_crops_scales_sharpens_burns():
     f = br.build_filter(Path(r"C:\tmp\subs.ass"))
     assert "crop=min(iw\\,ih*1080/1920):min(ih\\,iw*1920/1080)" in f
-    assert "scale=1080:1920" in f
+    assert "scale=1080:1920:flags=lanczos" in f
+    assert "cas=" in f                      # adaptive sharpen, before captions
+    assert f.index("cas=") < f.index("ass='")
     assert f.endswith("ass='C\\:/tmp/subs.ass'")
+
+
+def test_upscale_note_warns_on_tiny_sources():
+    note = br.upscale_note(202, 360)        # Ken's 360p subway rip
+    assert "soft" in note and "5.3x" in note
+    assert "720p+" in note
+
+
+def test_upscale_note_silent_on_decent_sources():
+    assert br.upscale_note(1080, 1920) == ""
+    assert br.upscale_note(1920, 1080) == ""  # 1080p landscape crops to ~1.8x
+    assert br.upscale_note(720, 1280) == ""   # 720p portrait is 1.5x, fine
 
 
 # ---- backgrounds -----------------------------------------------------------

@@ -528,12 +528,27 @@ def ffmpeg_filter_path(path: Path) -> str:
 
 
 def build_filter(ass_path: Path) -> str:
-    """Center-crop to 9:16, scale to 1080x1920, burn the captions."""
+    """Center-crop to 9:16, scale to 1080x1920, burn the captions.
+
+    Lanczos + contrast-adaptive sharpening make low-res gameplay upscale as
+    well as upscaling can: sharper edges, less mush. Captions are burned
+    after sharpening so the text stays clean."""
     return (
         f"crop=min(iw\\,ih*{OUT_W}/{OUT_H}):min(ih\\,iw*{OUT_H}/{OUT_W}),"
-        f"scale={OUT_W}:{OUT_H},setsar=1,"
+        f"scale={OUT_W}:{OUT_H}:flags=lanczos,cas=0.7,setsar=1,"
         f"ass='{ffmpeg_filter_path(ass_path)}'"
     )
+
+
+def upscale_note(width: int, height: int) -> str:
+    """A plain warning when background footage is too small to look good.
+    The cropped 9:16 column is what actually gets scaled to 1080 wide."""
+    cropped_w = min(width, height * OUT_W / OUT_H)
+    factor = OUT_W / cropped_w
+    if factor >= 2:
+        return (f"warning: background is {width}x{height}, ~{factor:.1f}x "
+                f"upscale - output will look soft, use 720p+ clips")
+    return ""
 
 
 def list_backgrounds(bg: Path, tag: str | None = None) -> list[Path]:
@@ -628,6 +643,16 @@ def probe_duration(path: Path) -> float:
         "-of", "csv=p=0", str(path),
     ])
     return float(out.strip())
+
+
+def probe_size(path: Path) -> tuple[int, int]:
+    out = run_checked([
+        ffprobe_bin(), "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=s=x:p=0", str(path),
+    ])
+    width, height = out.strip().splitlines()[0].split("x")[:2]
+    return int(width), int(height)
 
 
 def synth_voiceover(text: str, voice: str, rate: str, mp3_path: Path,
@@ -796,6 +821,7 @@ def render(
         rng = random.Random(seed)
         bg_file = rng.choice(backgrounds)
         bg_dur = probe_duration(bg_file)
+        bg_w, bg_h = probe_size(bg_file)
         need = audio_dur + TAIL_PAD
         offset, loop = choose_clip(bg_dur, need, rng)
         print(
@@ -804,6 +830,9 @@ def render(
             f"{' (looped)' if loop else ''}",
             flush=True,
         )
+        note = upscale_note(bg_w, bg_h)
+        if note:
+            print(note, flush=True)
 
         cmd = [ffmpeg_bin(), "-hide_banner", "-loglevel", "error", "-y"]
         if loop:
