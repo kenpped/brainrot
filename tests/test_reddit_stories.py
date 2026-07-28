@@ -38,8 +38,21 @@ def test_eligible_min_score_override():
     assert rs.eligible(post(score=600), set(), min_score=500)
 
 
+DISTINCT_WORDS = ["wedding", "fridge", "parking", "laundry", "garden",
+                  "karaoke", "birthday", "camping"]
+SECOND_WORDS = ["alpha", "bravo", "charlie", "delta", "echoes",
+                "foxtrot", "golfer", "hotels"]
+
+
+def distinct_post(i, **over):
+    w, w2 = DISTINCT_WORDS[i], SECOND_WORDS[i]
+    return post(id=f"p{i}", title=f"AITA regarding the {w} {w2} fiasco?",
+                selftext=f"a {w} story with distinctly {w2} words each time " * 60,
+                **over)
+
+
 def test_select_sorts_by_score_and_caps():
-    posts = [post(id=f"p{i}", score=1000 + i * 100) for i in range(6)]
+    posts = [distinct_post(i, score=1000 + i * 100) for i in range(6)]
     picked = rs.select_stories(posts, set(), count=3)
     assert [p["id"] for p in picked] == ["p5", "p4", "p3"]
 
@@ -48,6 +61,61 @@ def test_select_skips_used():
     posts = [post(id="a"), post(id="b", score=9000)]
     picked = rs.select_stories(posts, {"b"}, count=5)
     assert [p["id"] for p in picked] == ["a"]
+
+
+# ---- repost / dupe detection -----------------------------------------------
+
+STORY = ("My sister asked me to put in a good word for her at my company "
+         "even though she was fired from her last three jobs for showing up "
+         "late every single day and I told her no because my reputation "
+         "matters more than her feelings and now the whole family says I am "
+         "selfish and should apologize at dinner on Sunday ") * 12
+
+REWORDED = STORY.replace("sister", "younger sister").replace(
+    "selfish", "heartless").replace("Sunday", "Saturday")
+
+
+def test_dupe_catches_reworded_repost():
+    made = post(id="old1", selftext=STORY)
+    entries = {"old1": rs.signature(made)}
+    repost = post(id="new9", title="AITA for not helping my sister get a job?",
+                  selftext=REWORDED)
+    match = rs.dupe_of(repost, entries)
+    assert match is not None and match[0] == "old1"
+
+
+def test_dupe_passes_unrelated_story():
+    entries = {"old1": rs.signature(post(id="old1", selftext=STORY))}
+    fresh = post(id="new2", title="AITA for eating my roommate's leftovers?",
+                 selftext="Completely different words about pizza in the "
+                          "fridge and a passive aggressive note " * 30)
+    assert rs.dupe_of(fresh, entries) is None
+
+
+def test_select_rejects_reposts_and_same_run_twins():
+    entries = {"old1": rs.signature(post(id="old1", selftext=STORY))}
+    twin_a = post(id="tw1", title="AITA about my roommate and the fridge?",
+                  selftext="One brand new story told in many "
+                           "different original words " * 40)
+    twin_b = post(id="tw2", title="Same fridge drama posted again an hour later",
+                  selftext=twin_a["selftext"])
+    repost = post(id="rp1", title="Family thinks I owe my sibling an apology",
+                  selftext=REWORDED)
+    picked = rs.select_stories([twin_a, twin_b, repost], entries, count=5)
+    assert [p["id"] for p in picked] == ["tw1"]  # repost + twin both rejected
+
+
+def test_history_migrates_v1_id_list(tmp_path):
+    old = tmp_path / ".used.json"
+    old.write_text('["aaa", "bbb"]', encoding="utf-8")
+    hist = rs.load_history(old)
+    assert set(hist) == {"aaa", "bbb"}
+    assert rs.load_used(old) == {"aaa", "bbb"}       # id blocking still works
+    hist["ccc"] = rs.signature(post(id="ccc"))
+    rs.save_history(hist, old)
+    again = rs.load_history(old)
+    assert set(again) == {"aaa", "bbb", "ccc"}
+    assert again["ccc"]["t"]                          # signatures persist
 
 
 # ---- naming, state, prompt, validation -------------------------------------
@@ -134,7 +202,9 @@ def test_eligible_accepts_rss_posts_without_scores():
 
 
 def test_select_preserves_feed_order_for_unscored():
-    posts = [post(id=f"r{i}", score=None) for i in range(4)]
+    posts = [distinct_post(i, score=None) for i in range(4)]
+    for i, p in enumerate(posts):
+        p["id"] = f"r{i}"
     picked = rs.select_stories(posts, set(), count=3)
     assert [p["id"] for p in picked] == ["r0", "r1", "r2"]  # feed order kept
 

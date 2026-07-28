@@ -24,6 +24,7 @@ import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -76,17 +77,79 @@ BEGIN SCRIPT
 END SCRIPT"""
 
 
+# similarity thresholds for repost detection: reworded reposts keep most of
+# their 5-word chunks; unrelated stories share almost none
+TITLE_SIM = 0.6
+BODY_SIM = 0.35
+TITLE_STOP = {"aita", "aitah", "wibta", "wibtah", "would", "that", "this",
+              "with", "from", "when", "after", "about", "being", "them",
+              "they", "have", "because", "refusing", "telling"}
+
+
 # ---- pure helpers (gate-tested, no network) --------------------------------
 
+def title_tokens(title: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z']+", title.lower())
+            if len(w) > 3 and w not in TITLE_STOP}
+
+
+def shingles(text: str, n: int = 5, cap: int = 200) -> set[int]:
+    """Hashes of overlapping n-word chunks: a reworded repost still shares
+    most of them, an unrelated story shares nearly none."""
+    words = re.findall(r"[a-z']+", text.lower())
+    out: set[int] = set()
+    for i in range(len(words) - n + 1):
+        out.add(zlib.crc32(" ".join(words[i:i + n]).encode("utf-8")))
+        if len(out) >= cap:
+            break
+    return out
+
+
+def jaccard(a: set, b: set) -> float:
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def signature(post: dict) -> dict:
+    return {"t": sorted(title_tokens(post.get("title", ""))),
+            "s": sorted(shingles(post.get("selftext", ""))),
+            "title": post.get("title", "")[:80]}
+
+
+def dupe_of(post: dict, entries: dict) -> tuple[str, str] | None:
+    """(matched id, matched title) when the post retells a story we already
+    made a video of, else None. Catches reposts under new post ids."""
+    pt = title_tokens(post.get("title", ""))
+    ps = shingles(post.get("selftext", ""))
+    for pid, e in entries.items():
+        if jaccard(pt, set(e.get("t", []))) >= TITLE_SIM \
+                or jaccard(ps, set(e.get("s", []))) >= BODY_SIM:
+            return pid, e.get("title", "")
+    return None
+
+
+def load_history(path: Path = STATE_FILE) -> dict:
+    """{post_id: signature}. Migrates the v1 plain id list transparently
+    (old entries block by id only; new ones also block reworded reposts)."""
+    if not path.is_file():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, list):
+        return {pid: {"t": [], "s": [], "title": ""} for pid in data}
+    return data.get("made", {})
+
+
+def save_history(entries: dict, path: Path = STATE_FILE) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 2, "made": entries}),
+                    encoding="utf-8")
+
+
 def load_used(path: Path = STATE_FILE) -> set[str]:
-    if path.is_file():
-        return set(json.loads(path.read_text(encoding="utf-8")))
-    return set()
+    return set(load_history(path))
 
 
 def save_used(used: set[str], path: Path = STATE_FILE) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(sorted(used)), encoding="utf-8")
+    save_history({pid: {"t": [], "s": [], "title": ""} for pid in used}, path)
 
 
 def eligible(post: dict, used: set[str], min_score: int = MIN_SCORE) -> bool:
@@ -109,13 +172,28 @@ def eligible(post: dict, used: set[str], min_score: int = MIN_SCORE) -> bool:
     return not any(term in haystack for term in BLOCKLIST)
 
 
-def select_stories(posts: list[dict], used: set[str], count: int,
+def select_stories(posts: list[dict], history: dict | set, count: int,
                    min_score: int = MIN_SCORE) -> list[dict]:
-    picks = [p for p in posts if eligible(p, used, min_score)]
-    # scored posts sort by score; None-score (RSS) posts tie at 0 and the
-    # stable sort preserves the feed's own top-ranked order
-    picks.sort(key=lambda p: p.get("score") or 0, reverse=True)
-    return picks[:count]
+    """history: {id: signature} (or a bare id set for tests/back-compat).
+    Rejects already-made ids, reworded reposts of past videos, AND two
+    tellings of the same story inside one run."""
+    entries = history if isinstance(history, dict) else \
+        {pid: {"t": [], "s": [], "title": ""} for pid in history}
+    candidates = [p for p in posts if eligible(p, set(entries), min_score)]
+    candidates.sort(key=lambda p: p.get("score") or 0, reverse=True)
+    picks: list[dict] = []
+    seen_this_run: dict = {}
+    for post in candidates:
+        if len(picks) >= count:
+            break
+        match = dupe_of(post, entries) or dupe_of(post, seen_this_run)
+        if match:
+            print(f"  skipped (retells {match[0]} \"{match[1][:50]}\"): "
+                  f"{post.get('title', '')[:60]}", flush=True)
+            continue
+        picks.append(post)
+        seen_this_run[post["id"]] = signature(post)
+    return picks
 
 
 def _strip_html(fragment: str) -> str:
@@ -239,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="skip the Reddit post header card overlay")
     args = ap.parse_args(argv)
 
-    used = load_used()
+    history = load_history()
     posts, fetch_errors = [], []
     subs = [s.strip() for s in args.subs.split(",") if s.strip()]
     for i, sub in enumerate(subs):
@@ -255,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
     for line in fetch_errors:
         print(f"  fetch failed - {line}", file=sys.stderr, flush=True)
 
-    candidates = select_stories(posts, used, args.count * 3, args.min_score)
+    candidates = select_stories(posts, history, args.count * 3, args.min_score)
     if not candidates:
         print("no stories passed the bar - try --t week or --min-score 500",
               file=sys.stderr)
@@ -298,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
         dest = REDDIT_DIR / f"{story_slug(post)}.txt"
         dest.write_text("\n".join(front) + "\n---\n" + script + "\n",
                         encoding="utf-8")
-        used.add(post["id"])
-        save_used(used)
+        history[post["id"]] = signature(post)
+        save_history(history)
         if args.no_render:
             made.append(dest)
             print(f"  script: {dest}", flush=True)
