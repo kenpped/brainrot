@@ -14,13 +14,25 @@ def test_youtube_url_regex():
     ok = ["https://www.youtube.com/watch?v=abc123",
           "https://youtu.be/abc123",
           "https://m.youtube.com/watch?v=abc123",
-          "https://www.youtube.com/shorts/abc123"]
+          "https://www.youtube.com/shorts/abc123",
+          "https://youtube.com/playlist?list=PLxyz&si=abc"]
     for u in ok:
         assert get_bg.YT_RE.match(u), u
     bad = ["https://vimeo.com/123", "https://example.com/watch?v=1",
            "notaurl", "https://youtube.evil.com/watch?v=1"]
     for u in bad:
         assert not get_bg.YT_RE.match(u), u
+
+
+def test_playlist_mode_flags(tmp_path):
+    single = get_bg.build_download_cmd("https://youtu.be/x", tmp_path)
+    assert "--no-playlist" in single and "--playlist-items" not in single
+    pl = get_bg.build_download_cmd(
+        "https://youtube.com/playlist?list=PLxyz", tmp_path, max_items=7)
+    assert "--no-playlist" not in pl
+    assert pl[pl.index("--playlist-items") + 1] == "1:7"
+    assert "--ignore-errors" in pl        # one dead video must not kill the batch
+    assert pl[pl.index("--match-filters") + 1] == f"duration<{get_bg.MAX_MINUTES * 60}"
 
 
 def test_format_caps_at_1080():
@@ -54,7 +66,28 @@ def test_fetch_parses_filepath_and_license(tmp_path, monkeypatch):
 
     monkeypatch.setattr(get_bg.subprocess, "run", fake_run)
     got = get_bg.fetch("https://youtu.be/abc", "minecraft", tmp_path)
-    assert got == clip
+    assert got == [clip]
+
+
+def test_fetch_playlist_returns_all_paths(tmp_path, monkeypatch):
+    clips = [tmp_path / "gta" / f"Part_{i} [i{i}].mp4" for i in range(3)]
+
+    class FakeProc:
+        returncode = 0
+        stderr = ""
+        stdout = "\n".join(
+            line for i, c in enumerate(clips)
+            for line in (f"Part {i} | license: Standard YouTube License", str(c)))
+
+    def fake_run(cmd, **kwargs):
+        for c in clips:
+            c.parent.mkdir(parents=True, exist_ok=True)
+            c.write_bytes(b"v")
+        return FakeProc()
+
+    monkeypatch.setattr(get_bg.subprocess, "run", fake_run)
+    got = get_bg.fetch("https://youtube.com/playlist?list=PLx", "gta", tmp_path)
+    assert got == clips
 
 
 def test_fetch_raises_with_yt_dlp_error(tmp_path, monkeypatch):
@@ -89,7 +122,7 @@ def test_fetch_retries_bot_check_with_tv_client(tmp_path, monkeypatch):
         return p
 
     monkeypatch.setattr(get_bg.subprocess, "run", fake_run)
-    assert get_bg.fetch("https://youtu.be/x", "gta", tmp_path) == clip
+    assert get_bg.fetch("https://youtu.be/x", "gta", tmp_path) == [clip]
     assert len(calls) == 2
     assert "youtube:player_client=tv" in calls[1]
     assert not any("player_client" in c for c in calls[0])

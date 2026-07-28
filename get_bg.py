@@ -29,10 +29,13 @@ sys.path.insert(0, str(ROOT))
 import brainrot as br
 
 YT_RE = re.compile(
-    r"^https?://(www\.|m\.)?(youtube\.com/(watch\?|shorts/)|youtu\.be/)", re.I)
+    r"^https?://(www\.|m\.)?(youtube\.com/(watch\?|shorts/|playlist\?)|youtu\.be/)",
+    re.I)
+PLAYLIST_RE = re.compile(r"youtube\.com/playlist\?", re.I)
 TAG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,23}$")
 # best video-only stream up to 1080p (audio gets replaced anyway), mp4 remux
 FORMAT = "bestvideo[height<=1080][ext=mp4]/bestvideo[height<=1080]/best[height<=1080]"
+MAX_MINUTES = 45   # playlist entries longer than this get skipped
 
 
 def ytdlp_bin() -> str:
@@ -51,14 +54,21 @@ def ytdlp_bin() -> str:
 
 
 def build_download_cmd(url: str, dest_dir: Path, client: str | None = None,
-                       cookies_browser: str | None = None) -> list[str]:
+                       cookies_browser: str | None = None,
+                       max_items: int = 10) -> list[str]:
     cmd = [
         ytdlp_bin(), "-f", FORMAT, "--remux-video", "mp4",
-        "--no-playlist", "--restrict-filenames",
+        "--restrict-filenames",
         "-o", str(dest_dir / "%(title).60s [%(id)s].%(ext)s"),
         "--no-simulate", "--print", "after_move:filepath",
         "--print", "%(title)s | license: %(license,default=Standard YouTube License)s",
     ]
+    if PLAYLIST_RE.search(url):
+        cmd += ["--playlist-items", f"1:{max_items}", "--ignore-errors",
+                # hour-long entries are multi-GB; backgrounds don't need them
+                "--match-filters", f"duration<{MAX_MINUTES * 60}"]
+    else:
+        cmd += ["--no-playlist"]
     if client:
         cmd += ["--extractor-args", f"youtube:player_client={client}"]
     if cookies_browser:
@@ -77,29 +87,31 @@ def _run_ytdlp(cmd: list[str]) -> subprocess.CompletedProcess:
 
 
 def fetch(url: str, tag: str, bg_dir: Path,
-          cookies_browser: str | None = None) -> Path:
-    """Download one video into bg_dir/tag/ and return the file path.
-    YouTube sometimes throws a sign-in bot check at the default client;
-    the tv client usually passes it, so that retry is automatic."""
+          cookies_browser: str | None = None, max_items: int = 10) -> list[Path]:
+    """Download a video (or the first max_items of a playlist) into
+    bg_dir/tag/ and return the file paths. YouTube sometimes throws a
+    sign-in bot check at the default client; the tv client usually passes
+    it, so that retry is automatic."""
     dest_dir = bg_dir / tag
     dest_dir.mkdir(parents=True, exist_ok=True)
-    proc = _run_ytdlp(build_download_cmd(url, dest_dir,
+    proc = _run_ytdlp(build_download_cmd(url, dest_dir, max_items=max_items,
                                          cookies_browser=cookies_browser))
     if proc.returncode != 0 and "confirm you" in proc.stderr:
         print("  bot check hit, retrying with the tv client...", flush=True)
         proc = _run_ytdlp(build_download_cmd(url, dest_dir, client="tv",
+                                             max_items=max_items,
                                              cookies_browser=cookies_browser))
-    if proc.returncode != 0:
+    lines = [l for l in proc.stdout.strip().splitlines() if l.strip()]
+    paths = [Path(l) for l in lines
+             if l.lower().endswith((".mp4", ".mkv", ".webm"))]
+    paths = [p for p in paths if p.is_file()]
+    for info in (l for l in lines if "license:" in l):
+        print(f"  {info}", flush=True)
+    # playlists run with --ignore-errors: partial success beats nothing
+    if not paths:
         detail = proc.stderr.strip().splitlines()[-1:] or ["unknown error"]
         raise RuntimeError(f"yt-dlp failed: {detail[0]}")
-    lines = [l for l in proc.stdout.strip().splitlines() if l.strip()]
-    path = next((Path(l) for l in lines if l.lower().endswith((".mp4", ".mkv", ".webm"))), None)
-    info = next((l for l in lines if "license:" in l), "")
-    if info:
-        print(f"  {info}", flush=True)
-    if path is None or not path.is_file():
-        raise RuntimeError("yt-dlp finished but the output file was not found")
-    return path
+    return paths
 
 
 def grade(path: Path) -> str:
@@ -120,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="OPT-IN: pass your browser's YouTube session to "
                          "yt-dlp (e.g. chrome, edge) if the bot check blocks "
                          "both clients; ties downloads to your account")
+    ap.add_argument("--max", type=int, default=10, dest="max_items",
+                    help="cap per playlist link (disk + OneDrive sync sanity)")
     args = ap.parse_args(argv)
 
     if not TAG_RE.match(args.tag):
@@ -132,10 +146,12 @@ def main(argv: list[str] | None = None) -> int:
     for i, url in enumerate(args.urls):
         print(f"[{i + 1}/{len(args.urls)}] {url}", flush=True)
         try:
-            path = fetch(url, args.tag, args.bg,
-                         cookies_browser=args.cookies_from_browser)
-            print(f"  {path.name}: {grade(path)}", flush=True)
-            got.append(path)
+            paths = fetch(url, args.tag, args.bg,
+                          cookies_browser=args.cookies_from_browser,
+                          max_items=args.max_items)
+            for path in paths:
+                print(f"  {path.name}: {grade(path)}", flush=True)
+            got.extend(paths)
         except (RuntimeError, ValueError) as e:
             print(f"  FAILED: {e}", file=sys.stderr, flush=True)
             failed.append(url)
