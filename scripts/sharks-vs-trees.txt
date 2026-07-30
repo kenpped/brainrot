@@ -1,0 +1,12 @@
+cast: grump, hype
+avatars: grump=blob-blue.png, hype=blob-red.png
+style: hype
+---
+grump: Sharks are older than trees. That cannot be right.
+hype: Sharks showed up 450 million years ago! Trees needed another 60 million to even exist!
+grump: So sharks were swimming before wood was invented.
+hype: Sharks are older than Saturn's rings! Older than the North Star!
+grump: I refuse to be impressed.
+hype: They survived all five mass extinctions! ALL FIVE!
+grump: Fine. That is mildly impressive.
+hype: The ocean has been running the same shark since before dirt had a resume!

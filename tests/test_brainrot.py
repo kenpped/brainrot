@@ -691,6 +691,77 @@ def test_render_rejects_missing_overlay_before_tts(tmp_path, monkeypatch):
         br.render(script, tmp_path / "missing", tmp_path / "o.mp4")
 
 
+# ---- avatars ---------------------------------------------------------------
+
+def test_avatar_gate_expressions():
+    spans = br.speaker_spans([("a", 2.0), ("b", 3.0), ("a", 1.0)], gap=0.5)
+    gate = br.avatar_gate(spans, "a")
+    assert gate.startswith("max(between(t,0.00,2.50),")
+    assert "between(t,6.00," in gate           # a's second line
+    assert "3.00" not in gate.split("max")[0]  # b's line not in a's gate
+    assert br.avatar_gate(spans, None) == "1"  # solo narrator always bobs
+    assert br.avatar_gate(None, "a") == "1"
+
+
+def test_avatar_gate_clamps_open_ended_last_span():
+    spans = br.speaker_spans([("a", 2.0)], gap=0.5)  # last span end = inf
+    gate = br.avatar_gate(spans, "a")
+    assert "inf" not in gate and "between(t,0.00,600.00)" in gate
+
+
+def test_nested_max_folds_binary():
+    assert br._nested_max(["x"]) == "x"
+    assert br._nested_max(["x", "y", "z"]) == "max(x,max(y,z))"
+
+
+def test_build_avatar_chain_two_speakers():
+    spans = br.speaker_spans([("a", 2.0), ("b", 3.0)], gap=0.5)
+    graph, label = br.build_avatar_chain(
+        "[v0]", 2,
+        [{"name": "a", "side": "left"}, {"name": "b", "side": "right"}],
+        spans)
+    assert label == "[w1]"
+    assert f"[2:v]scale={br.AVATAR_W}:-1[av0]" in graph
+    assert "[v0][av0]overlay=x=48:y='" in graph
+    assert "[w0][av1]overlay=x=main_w-overlay_w-48:y='" in graph
+    assert f"sin(2*PI*t*{br.AVATAR_BOB_HZ})" in graph
+
+
+def test_parse_script_avatars_front_matter(tmp_path):
+    f = tmp_path / "s.txt"
+    f.write_text("avatars: Grump=old.png, HYPE=kid.png\n---\nbody",
+                 encoding="utf-8")
+    _, meta = br.parse_script(f)
+    assert meta["avatars"] == {"grump": "old.png", "hype": "kid.png"}
+
+
+def test_render_rejects_avatar_for_unknown_speaker(tmp_path, monkeypatch):
+    script = tmp_path / "s.txt"
+    script.write_text("cast: grump, hype\navatars: nobody=x.png\n---\n"
+                      "grump: hi\nhype: yo", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("TTS ran before avatar validation")
+
+    monkeypatch.setattr(br, "synth_voiceover", boom)
+    monkeypatch.setattr(br.shutil, "which", lambda _: "ffmpeg")
+    with pytest.raises(ValueError, match="unknown speakers: nobody"):
+        br.render(script, tmp_path / "missing", tmp_path / "o.mp4")
+
+
+def test_render_rejects_missing_avatar_png_before_tts(tmp_path, monkeypatch):
+    script = tmp_path / "s.txt"
+    script.write_text("avatar: ghost.png\n---\nhello", encoding="utf-8")
+
+    def boom(*a, **k):
+        raise AssertionError("TTS ran before avatar validation")
+
+    monkeypatch.setattr(br, "synth_voiceover", boom)
+    monkeypatch.setattr(br.shutil, "which", lambda _: "ffmpeg")
+    with pytest.raises(ValueError, match="overlay not found"):
+        br.render(script, tmp_path / "missing", tmp_path / "o.mp4")
+
+
 # ---- choose_clip -----------------------------------------------------------
 
 def test_choose_clip_offset_in_range_and_deterministic():

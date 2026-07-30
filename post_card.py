@@ -95,3 +95,28 @@ def make_post_card(
     out_png.parent.mkdir(parents=True, exist_ok=True)
     img.save(out_png)
     return out_png
+
+
+def make_demo_avatar(out_png: Path, color: tuple = (80, 160, 255),
+                     size: int = 420) -> Path:
+    """A placeholder speaking-character blob (round body, big eyes, open
+    mouth) so avatar videos work before the user supplies real PNGs."""
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    m = size // 10
+    draw.ellipse([m, m, size - m, size - m], fill=(*color, 255),
+                 outline=(20, 20, 30, 255), width=6)
+    eye_y, eye_r = size * 0.38, size * 0.09
+    for cx in (size * 0.36, size * 0.64):
+        draw.ellipse([cx - eye_r, eye_y - eye_r, cx + eye_r, eye_y + eye_r],
+                     fill=(255, 255, 255, 255))
+        draw.ellipse([cx - eye_r * 0.45, eye_y - eye_r * 0.45,
+                      cx + eye_r * 0.45, eye_y + eye_r * 0.45],
+                     fill=(15, 15, 20, 255))
+    mw, mh, my = size * 0.16, size * 0.11, size * 0.62
+    draw.ellipse([size / 2 - mw, my - mh, size / 2 + mw, my + mh],
+                 fill=(30, 15, 20, 255))
+    out_png = Path(out_png)
+    out_png.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out_png)
+    return out_png

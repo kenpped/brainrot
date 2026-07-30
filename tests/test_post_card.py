@@ -36,6 +36,14 @@ def test_no_score_shows_no_fabricated_numbers(tmp_path):
     assert out.is_file()  # renders fine with score=None, comments=None
 
 
+def test_demo_avatar_renders(tmp_path):
+    out = post_card.make_demo_avatar(tmp_path / "blob.png", color=(255, 80, 80))
+    img = Image.open(out)
+    assert img.mode == "RGBA" and img.width == 420
+    assert img.getextrema()[3][1] == 255      # opaque blob on transparent bg
+    assert img.getpixel((5, 5))[3] == 0       # corners stay transparent
+
+
 def test_wrap_title_caps_at_four_lines():
     from PIL import ImageDraw
     draw = ImageDraw.Draw(Image.new("RGBA", (100, 10)))

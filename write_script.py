@@ -108,6 +108,25 @@ BEGIN SCRIPT
 {b}: second line
 END SCRIPT"""
 
+EDU_PROMPT = GUARD + """\
+Write a short EDUCATIONAL script for a vertical brainrot-style video about:
+{topic}
+
+Rules:
+- 130 to 160 words, spoken prose only
+- cold-open with a question or claim that sounds fake but is true
+- one line on why the viewer should care
+- exactly three concrete facts, each with a real number, date, or comparison
+- close with a twist that reframes everything, then one-line takeaway
+- accuracy matters: no invented statistics, no urban legends
+- stay strictly on the topic: {topic}
+- no emojis, no hashtags, no stage directions, no markdown
+
+Output EXACTLY this shape and nothing else:
+BEGIN SCRIPT
+<the script text>
+END SCRIPT"""
+
 RETRY_SUFFIX = (
     "\n\nREMINDER: your previous attempt failed validation. Output ONLY the "
     "BEGIN SCRIPT / END SCRIPT block, on topic, with no commentary, no file "
@@ -122,7 +141,8 @@ def slugify(topic: str, max_len: int = 40) -> str:
 
 def build_prompt(topic: str, dialogue: bool,
                  cast: list[str] | None = None,
-                 characters: dict | None = None) -> str:
+                 characters: dict | None = None,
+                 edu: bool = False) -> str:
     if cast and characters:
         a, b = cast[0], cast[1]
         return CAST_PROMPT.format(
@@ -130,6 +150,8 @@ def build_prompt(topic: str, dialogue: bool,
             persona_a=characters[a]["persona"],
             persona_b=characters[b]["persona"],
         )
+    if edu and not dialogue:
+        return EDU_PROMPT.format(topic=topic)
     template = DIALOGUE_PROMPT if dialogue else MONO_PROMPT
     return template.format(topic=topic)
 
@@ -205,9 +227,11 @@ def ask_claude(prompt: str, timeout: int = 300) -> str:
 
 def generate(topic: str, dialogue: bool, attempts: int = 2,
              cast: list[str] | None = None,
-             characters: dict | None = None) -> str:
+             characters: dict | None = None,
+             edu: bool = False) -> str:
     """Ask, validate, retry once, or fail loudly with the raw reply."""
-    prompt = build_prompt(topic, dialogue, cast=cast, characters=characters)
+    prompt = build_prompt(topic, dialogue, cast=cast, characters=characters,
+                          edu=edu)
     last_raw, last_reason = "", "no attempt made"
     for i in range(attempts):
         raw = ask_claude(prompt if i == 0 else prompt + RETRY_SUFFIX)
@@ -237,6 +261,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--cast", default=None,
                     help="two characters.json names, e.g. grump,hype "
                          "(implies --dialogue, personas steer the writing)")
+    ap.add_argument("--edu", action="store_true",
+                    help="educational structure: hook, why care, three real "
+                         "facts with numbers, twist close")
     ap.add_argument("--style", default=None, help="styles.json preset to bake in")
     ap.add_argument("--bg", default=None, help="background tag to bake in, e.g. minecraft")
     ap.add_argument("--voice-a", default=DEFAULT_VOICE_A, help="dialogue speaker A voice")
@@ -263,7 +290,8 @@ def main(argv: list[str] | None = None) -> int:
         ("dialogue" if args.dialogue else "monologue")
     print(f"asking local Claude for a {mode} about: {args.topic}", flush=True)
     try:
-        body = generate(args.topic, args.dialogue, cast=cast, characters=characters)
+        body = generate(args.topic, args.dialogue, cast=cast,
+                        characters=characters, edu=args.edu)
     except RuntimeError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

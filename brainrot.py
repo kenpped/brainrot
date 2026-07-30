@@ -112,8 +112,12 @@ DEFAULTS = {
 PHRASE_MAX_WORDS = 4
 PHRASE_GAP_BREAK = 0.6
 STYLE_KEYS = set(DEFAULTS)
-FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast", "overlay"}
+FRONT_KEYS = STYLE_KEYS | {"style", "bg", "speakers", "cast", "overlay",
+                           "avatar", "avatars"}
 OVERLAY_Y = 96                 # px from the top for the overlay card
+AVATAR_W = 380                 # px width of speaking-character PNGs
+AVATAR_BOB_PX = 18             # bounce amplitude while speaking
+AVATAR_BOB_HZ = 2.4
 DIALOGUE_GAP = 0.35            # silence between dialogue lines, seconds
 SPEAKER_PALETTE = ["white", "yellow", "cyan", "lime", "pink"]  # caption color per speaker
 
@@ -186,7 +190,7 @@ def load_styles(path: Path | None = None) -> dict:
 
 
 def validate_character(name: str, c: dict) -> None:
-    allowed = {"voice", "pitch", "rate_bump", "color", "persona", "fx"}
+    allowed = {"voice", "pitch", "rate_bump", "color", "persona", "fx", "avatar"}
     unknown = set(c) - allowed
     if unknown:
         raise ValueError(f"character '{name}': unknown keys {sorted(unknown)}")
@@ -249,6 +253,14 @@ def _convert_front_value(key: str, value: str):
         return [c.strip().lower() for c in value.split(",")]
     if key == "speakers":
         return _parse_speakers(value)
+    if key == "avatars":
+        pairs = {}
+        for pair in value.split(","):
+            if "=" not in pair:
+                raise ValueError(f"avatars entry {pair.strip()!r} must be name=file.png")
+            name, png = pair.split("=", 1)
+            pairs[name.strip().lower()] = png.strip()
+        return pairs
     if key == "cast":
         names = [n.strip().lower() for n in value.split(",") if n.strip()]
         if len(names) < 2:
@@ -613,9 +625,10 @@ def build_filter(ass_path: Path, with_overlay: bool = False) -> str:
 
 
 def resolve_overlay(spec: str, script_path: Path) -> Path:
-    """Overlay paths resolve next to the script first (generated cards live
-    beside their scripts), then project root, then as given."""
-    for base in (Path(script_path).parent, Path(__file__).resolve().parent):
+    """Overlay/avatar paths resolve next to the script first (generated
+    assets live beside their scripts), then avatars/, then project root."""
+    root = Path(__file__).resolve().parent
+    for base in (Path(script_path).parent, root / "avatars", root):
         candidate = base / spec
         if candidate.is_file():
             return candidate
@@ -623,6 +636,50 @@ def resolve_overlay(spec: str, script_path: Path) -> Path:
     if p.is_file():
         return p
     raise ValueError(f"overlay not found: {spec}")
+
+
+def _nested_max(terms: list[str]) -> str:
+    """ffmpeg max() is binary; fold a list into max(a,max(b,...))."""
+    expr = terms[-1]
+    for term in reversed(terms[:-1]):
+        expr = f"max({term},{expr})"
+    return expr
+
+
+def avatar_gate(spans: list[tuple[float, float, str]] | None,
+                name: str | None, cap: int = 24) -> str:
+    """1 while this character is talking, 0 otherwise (as an ffmpeg expr).
+    No spans or no name = a solo narrator, always animated."""
+    if not spans or not name:
+        return "1"
+    mine = [(s, min(e, s + 600)) for s, e, n in spans if n == name][:cap]
+    if not mine:
+        return "1"
+    terms = [f"between(t,{s:.2f},{e:.2f})" for s, e in mine]
+    return _nested_max(terms)
+
+
+def build_avatar_chain(
+    start_label: str,
+    first_input: int,
+    avatars: list[dict],
+    spans: list[tuple[float, float, str]] | None,
+) -> tuple[str, str]:
+    """Filtergraph tail that scales each avatar PNG and overlays it with a
+    speech-gated bob. avatars: [{"name": str|None, "side": "left"|"right"}].
+    Returns (filter string, final label). Commas inside between() live in a
+    quoted y expression, same trick as the quoted ass= path."""
+    parts, label = [], start_label
+    for i, av in enumerate(avatars):
+        gate = avatar_gate(spans, av.get("name"))
+        x = "48" if av["side"] == "left" else "main_w-overlay_w-48"
+        y = (f"'main_h-overlay_h-90+{AVATAR_BOB_PX}"
+             f"*sin(2*PI*t*{AVATAR_BOB_HZ})*{gate}'")
+        out = f"[w{i}]"
+        parts.append(f"[{first_input + i}:v]scale={AVATAR_W}:-1[av{i}]")
+        parts.append(f"{label}[av{i}]overlay=x={x}:y={y}{out}")
+        label = out
+    return ";".join(parts), label
 
 
 def upscale_note(width: int, height: int) -> str:
@@ -859,6 +916,26 @@ def render(
     overlay_spec = (cli or {}).get("overlay") or front.get("overlay")
     overlay_path = resolve_overlay(overlay_spec, script_path) if overlay_spec else None
 
+    # speaking-character PNGs: per-speaker in dialogue (front matter `avatars:`
+    # or the character's own avatar field), single narrator via `avatar:`
+    avatar_meta: list[dict] = []
+    avatar_files: list[Path] = []
+    front_avatars = front.get("avatars") or {}
+    unknown_av = [n for n in front_avatars if not speakers_cfg or n not in speakers_cfg]
+    if unknown_av:
+        raise ValueError(f"avatars for unknown speakers: {', '.join(unknown_av)}")
+    if speakers_cfg:
+        for name in speakers_cfg:
+            spec = front_avatars.get(name) or speakers_cfg[name].get("avatar")
+            if spec:
+                avatar_files.append(resolve_overlay(spec, script_path))
+                avatar_meta.append(
+                    {"name": name,
+                     "side": "left" if len(avatar_meta) % 2 == 0 else "right"})
+    elif front.get("avatar"):
+        avatar_files.append(resolve_overlay(front["avatar"], script_path))
+        avatar_meta.append({"name": None, "side": "right"})
+
     backgrounds = list_backgrounds(Path(bg), tag=bg_tag)
     warn_if_font_missing(s["font"])
     out = Path(out)
@@ -931,10 +1008,24 @@ def render(
         ]
         if overlay_path:
             cmd += ["-loop", "1", "-i", str(overlay_path)]
+        for png in avatar_files:
+            cmd += ["-loop", "1", "-i", str(png)]
         cmd += ["-t", f"{need:.3f}"]
-        if overlay_path:
-            cmd += ["-filter_complex", build_filter(ass_path, with_overlay=True),
-                    "-map", "[vo]", "-map", "1:a:0"]
+        if overlay_path or avatar_meta:
+            parts = [f"[0:v]{build_filter(ass_path)}[v0]"]
+            label, idx = "[v0]", 2
+            if overlay_path:
+                parts.append(f"{label}[{idx}:v]overlay="
+                             f"(main_w-overlay_w)/2:{OVERLAY_Y}[vc]")
+                label, idx = "[vc]", idx + 1
+            if avatar_meta:
+                tail, label = build_avatar_chain(label, idx, avatar_meta, spans)
+                parts.append(tail)
+                who = ", ".join(f"{a['name'] or 'narrator'}({a['side']})"
+                                for a in avatar_meta)
+                print(f"           avatars: {who}", flush=True)
+            cmd += ["-filter_complex", ";".join(parts),
+                    "-map", label, "-map", "1:a:0"]
         else:
             cmd += ["-vf", build_filter(ass_path),
                     "-map", "0:v:0", "-map", "1:a:0"]

@@ -127,6 +127,16 @@ def test_build_front_matter_cast_wins_over_speakers():
     assert "speakers" not in fm
 
 
+def test_build_prompt_edu_mode():
+    p = ws.build_prompt("why sharks are older than trees", False, edu=True)
+    assert "three concrete facts" in p and "no invented statistics" in p
+    assert "why sharks are older than trees" in p
+    assert ws.SENTINEL_BEGIN in p
+    # dialogue and cast take precedence over edu
+    d = ws.build_prompt("t", True, edu=True)
+    assert "two-speaker" in d
+
+
 def test_build_prompt_cast_injects_personas():
     chars = {
         "grump": {"voice": "v", "persona": "a permanently unimpressed old man"},
