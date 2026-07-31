@@ -4,6 +4,7 @@
     "pitch": "-18Hz",
     "rate_bump": -8,
     "color": "orange",
+    "avatar": "nugget.png",
     "persona": "a permanently unimpressed old man who has seen everything, complains constantly, and hates that the other person keeps being right"
   },
   "hype": {
@@ -11,6 +12,7 @@
     "pitch": "+14Hz",
     "rate_bump": 6,
     "color": "yellow",
+    "avatar": "patrick.png",
     "persona": "an overcaffeinated hype kid who treats every fact like a game-winning play and cannot physically stay calm"
   },
   "posh": {
@@ -18,6 +20,7 @@
     "pitch": "+4Hz",
     "rate_bump": 0,
     "color": "cyan",
+    "avatar": "peter-classic.png",
     "persona": "a condescending British aristocrat who explains things like the listener is a disappointing nephew he still has hopes for"
   },
   "deadpan": {
