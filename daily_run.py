@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"--- edu {j + 1}/{n_edu}: {idea['title']} "
                   f"(narrator: {avatar}) ---", flush=True)
             code, out = run([PY, str(ROOT / "write_script.py"), idea["title"],
-                             "--edu", "--style", "deep", "--avatar", avatar,
+                             "--edu", "--style", "story", "--avatar", avatar,
                              "--outdir", str(EDU_DIR)])
             if code != 0:
                 failed += 1

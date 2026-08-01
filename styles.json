@@ -14,6 +14,13 @@
     "highlight": ["yellow", "red"],
     "highlight_chance": 0.3
   },
+  "story": {
+    "voice": "en-US-AndrewNeural",
+    "rate": "+24%",
+    "font": "Impact",
+    "highlight": ["yellow", "lime"],
+    "highlight_chance": 0.22
+  },
   "deep": {
     "voice": "en-US-ChristopherNeural",
     "rate": "+10%",

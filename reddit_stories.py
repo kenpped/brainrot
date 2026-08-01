@@ -305,8 +305,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="top of the day, or week when pickings are thin")
     ap.add_argument("--count", type=int, default=3, help="videos to make")
     ap.add_argument("--min-score", type=int, default=MIN_SCORE)
-    ap.add_argument("--style", default="deep",
-                    help="styles.json preset (deep = the reddit-stories voice)")
+    ap.add_argument("--style", default="story",
+                    help="styles.json preset (story = warm + quick narrator)")
     ap.add_argument("--bg-tag", default=None, help="background folder to use")
     ap.add_argument("--bg", type=Path, default=ROOT / "backgrounds")
     ap.add_argument("--dry-run", action="store_true",
