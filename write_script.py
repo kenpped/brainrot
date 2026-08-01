@@ -187,7 +187,8 @@ def on_topic(body: str, topic: str) -> bool:
 
 def build_front_matter(dialogue: bool, style: str | None, bg: str | None,
                        voice_a: str, voice_b: str,
-                       cast: list[str] | None = None) -> str:
+                       cast: list[str] | None = None,
+                       avatar: str | None = None) -> str:
     keys = []
     if cast:
         keys.append(f"cast: {', '.join(cast)}")
@@ -197,6 +198,8 @@ def build_front_matter(dialogue: bool, style: str | None, bg: str | None,
         keys.append(f"style: {style}")
     if bg:
         keys.append(f"bg: {bg}")
+    if avatar and not (cast or dialogue):
+        keys.append(f"avatar: {avatar}")   # solo narrator PNG
     return ("\n".join(keys) + "\n---\n") if keys else ""
 
 
@@ -264,6 +267,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--edu", action="store_true",
                     help="educational structure: hook, why care, three real "
                          "facts with numbers, twist close")
+    ap.add_argument("--avatar", default=None,
+                    help="solo narrator PNG (from avatars/), e.g. peter.png")
     ap.add_argument("--style", default=None, help="styles.json preset to bake in")
     ap.add_argument("--bg", default=None, help="background tag to bake in, e.g. minecraft")
     ap.add_argument("--voice-a", default=DEFAULT_VOICE_A, help="dialogue speaker A voice")
@@ -297,7 +302,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     front = build_front_matter(args.dialogue, args.style, args.bg,
-                               args.voice_a, args.voice_b, cast=cast)
+                               args.voice_a, args.voice_b, cast=cast,
+                               avatar=args.avatar)
     args.outdir.mkdir(parents=True, exist_ok=True)
     dest = args.outdir / f"{slugify(args.topic)}.txt"
     dest.write_text(front + body + "\n", encoding="utf-8")

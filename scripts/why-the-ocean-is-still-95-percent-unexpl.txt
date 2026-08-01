@@ -1,0 +1,17 @@
+cast: grump, hype
+style: hype
+bg: roblox
+---
+grump: Kid, we got maps of Mars sharper than the bottom of our own ocean. Explain that.
+hype: BECAUSE THE OCEAN IS PLAYING DEFENSE, OLD MAN! Light quits at two hundred meters!
+grump: Great. Dark water. Terrifying.
+hype: PRESSURE AT THE BOTTOM IS EIGHT TONS PER SQUARE INCH! That's a whole elephant standing on your THUMB!
+grump: I hate that you're right.
+hype: Radio waves DIE underwater! No GPS! Subs map with sound pings, one skinny strip at a time!
+grump: So we're coloring in the planet with a crayon.
+hype: A CRAYON THE SIZE OF A BOAT! Full seafloor mapped so far? About twenty-six percent!
+grump: And nobody's funding the rest.
+hype: One deep dive costs MILLIONS! Space gets the budget, the abyss gets a coupon!
+grump: Sixty percent of Earth is deep ocean and we've barely looked.
+hype: WE LIVE ON A MYSTERY PLANET AND EVERYBODY'S CHILL ABOUT IT!
+grump: I was chill. You ruined it.

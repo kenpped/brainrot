@@ -315,6 +315,8 @@ def main(argv: list[str] | None = None) -> int:
                     help="write the scripts but skip rendering")
     ap.add_argument("--no-card", action="store_true",
                     help="skip the Reddit post header card overlay")
+    ap.add_argument("--avatar", default=None,
+                    help="solo narrator PNG (from avatars/), e.g. peter.png")
     args = ap.parse_args(argv)
 
     history = load_history()
@@ -363,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
         front = [f"style: {args.style}"]
         if args.bg_tag:
             front.append(f"bg: {args.bg_tag}")
+        if args.avatar:
+            front.append(f"avatar: {args.avatar}")
         if not args.no_card:
             card = make_post_card(
                 title=post.get("title", ""),
