@@ -620,6 +620,18 @@ def test_list_backgrounds_dir_filters_and_recurses(tmp_path):
     assert {p.name for p in got} == {"a.MP4", "b.mp4"}
 
 
+def test_list_backgrounds_untagged_skips_lowres_quarantine(tmp_path):
+    """The quarantine leaked a whole 360p morning batch once - never again."""
+    (tmp_path / "roblox").mkdir()
+    (tmp_path / "roblox" / "good.mp4").write_bytes(b"x")
+    (tmp_path / "lowres").mkdir()
+    (tmp_path / "lowres" / "soft.mp4").write_bytes(b"x")
+    untagged = br.list_backgrounds(tmp_path)
+    assert [p.name for p in untagged] == ["good.mp4"]
+    explicit = br.list_backgrounds(tmp_path, tag="lowres")   # still reachable
+    assert [p.name for p in explicit] == ["soft.mp4"]
+
+
 def test_list_backgrounds_tag_narrows(tmp_path):
     (tmp_path / "minecraft").mkdir()
     (tmp_path / "gta").mkdir()

@@ -693,9 +693,14 @@ def upscale_note(width: int, height: int) -> str:
     return ""
 
 
+QUARANTINE_DIR = "lowres"      # untagged random picks never draw from here
+
+
 def list_backgrounds(bg: Path, tag: str | None = None) -> list[Path]:
     """All videos under bg (recursive). A tag narrows to the bg/<tag>/
-    subfolder, which is how `bg: minecraft` front matter picks its footage."""
+    subfolder, which is how `bg: minecraft` front matter picks its footage.
+    The lowres/ quarantine is excluded from untagged picks (it once leaked
+    360p clips into a whole morning batch) but reachable explicitly."""
     bg = Path(bg)
     if bg.is_file():
         if tag:
@@ -712,6 +717,7 @@ def list_backgrounds(bg: Path, tag: str | None = None) -> list[Path]:
     vids = sorted(
         p for p in root.rglob("*")
         if p.is_file() and p.suffix.lower() in VIDEO_EXTS
+        and (tag is not None or QUARANTINE_DIR not in p.parts)
     )
     if not vids:
         raise ValueError(f"no video files ({', '.join(sorted(VIDEO_EXTS))}) in {root}")
